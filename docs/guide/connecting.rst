@@ -31,6 +31,8 @@ the :attr:`host` to
 
     connect('project1', host='mongodb://localhost/database_name')
 
+.. note:: URI containing SRV records (e.g mongodb+srv://server.example.com/) can be used as well as the :attr:`host`
+
 .. note:: Database, username and password from URI string overrides
     corresponding parameters in :func:`~mongoengine.connect`: ::
 
@@ -42,7 +44,7 @@ the :attr:`host` to
         )
 
     will establish connection to ``production`` database using
-    ``admin`` username and ``qwerty`` password.
+    ``admin`` username and ``12345`` password.
 
 .. note:: Calling :func:`~mongoengine.connect` without argument will establish
     a connection to the "test" database by default
@@ -86,7 +88,7 @@ using 3 different databases to store data::
         connect(alias='user-db-alias', db='user-db')
         connect(alias='book-db-alias', db='book-db')
         connect(alias='users-books-db-alias', db='users-books-db')
-        
+
         class User(Document):
             name = StringField()
 

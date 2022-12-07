@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
 import pytest
 
 from mongoengine import *
-
 from tests.utils import MongoDBTestCase
 
 
@@ -28,20 +26,19 @@ class TestURLField(MongoDBTestCase):
             url = URLField()
 
         link = Link()
-        link.url = u"http://привет.com"
+        link.url = "http://привет.com"
 
         # TODO fix URL validation - this *IS* a valid URL
         # For now we just want to make sure that the error message is correct
         with pytest.raises(ValidationError) as exc_info:
             link.validate()
         assert (
-            unicode(exc_info.value)
-            == u"ValidationError (Link:None) (Invalid URL: http://\u043f\u0440\u0438\u0432\u0435\u0442.com: ['url'])"
+            str(exc_info.value)
+            == "ValidationError (Link:None) (Invalid URL: http://\u043f\u0440\u0438\u0432\u0435\u0442.com: ['url'])"
         )
 
     def test_url_scheme_validation(self):
-        """Ensure that URLFields validate urls with specific schemes properly.
-        """
+        """Ensure that URLFields validate urls with specific schemes properly."""
 
         class Link(Document):
             url = URLField()

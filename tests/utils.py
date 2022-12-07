@@ -1,3 +1,4 @@
+import operator
 import unittest
 
 import pytest
@@ -33,6 +34,10 @@ def get_as_pymongo(doc):
     return doc.__class__.objects.as_pymongo().get(id=doc.id)
 
 
+def requires_mongodb_gte_44(func):
+    return _decorated_with_ver_requirement(func, (4, 4), oper=operator.ge)
+
+
 def _decorated_with_ver_requirement(func, mongo_version_req, oper):
     """Return a MongoDB version requirement decorator.
 
@@ -50,7 +55,7 @@ def _decorated_with_ver_requirement(func, mongo_version_req, oper):
     ran against MongoDB < v3.6.
 
     :param mongo_version_req: The mongodb version requirement (tuple(int, int))
-    :param oper: The operator to apply (e.g: operator.ge)
+    :param oper: The operator to apply (e.g. operator.ge)
     """
 
     def _inner(*args, **kwargs):
@@ -59,7 +64,7 @@ def _decorated_with_ver_requirement(func, mongo_version_req, oper):
             return func(*args, **kwargs)
 
         pretty_version = ".".join(str(n) for n in mongo_version_req)
-        pytest.skip("Needs MongoDB v{}+".format(pretty_version))
+        pytest.skip(f"Needs MongoDB v{pretty_version}+")
 
     _inner.__name__ = func.__name__
     _inner.__doc__ = func.__doc__

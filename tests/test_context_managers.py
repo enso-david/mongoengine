@@ -8,6 +8,8 @@ from mongoengine.context_managers import (
     no_dereference,
     no_sub_classes,
     query_counter,
+    set_read_write_concern,
+    set_write_concern,
     switch_collection,
     switch_db,
 )
@@ -15,6 +17,52 @@ from mongoengine.pymongo_support import count_documents
 
 
 class TestContextManagers:
+    def test_set_write_concern(self):
+        connect("mongoenginetest")
+
+        class User(Document):
+            name = StringField()
+
+        collection = User._get_collection()
+        original_write_concern = collection.write_concern
+
+        with set_write_concern(
+            collection, {"w": "majority", "j": True, "wtimeout": 1234}
+        ) as updated_collection:
+            assert updated_collection.write_concern.document == {
+                "w": "majority",
+                "j": True,
+                "wtimeout": 1234,
+            }
+
+        assert original_write_concern.document == collection.write_concern.document
+
+    def test_set_read_write_concern(self):
+        connect("mongoenginetest")
+
+        class User(Document):
+            name = StringField()
+
+        collection = User._get_collection()
+
+        original_read_concern = collection.read_concern
+        original_write_concern = collection.write_concern
+
+        with set_read_write_concern(
+            collection,
+            {"w": "majority", "j": True, "wtimeout": 1234},
+            {"level": "local"},
+        ) as update_collection:
+            assert update_collection.read_concern.document == {"level": "local"}
+            assert update_collection.write_concern.document == {
+                "w": "majority",
+                "j": True,
+                "wtimeout": 1234,
+            }
+
+        assert original_read_concern.document == collection.read_concern.document
+        assert original_write_concern.document == collection.write_concern.document
+
     def test_switch_db_context_manager(self):
         connect("mongoenginetest")
         register_connection("testdb-1", "mongoenginetest2")
@@ -69,8 +117,7 @@ class TestContextManagers:
         assert 1 == Group.objects.count()
 
     def test_no_dereference_context_manager_object_id(self):
-        """Ensure that DBRef items in ListFields aren't dereferenced.
-        """
+        """Ensure that DBRef items in ListFields aren't dereferenced."""
         connect("mongoenginetest")
 
         class User(Document):
@@ -107,8 +154,7 @@ class TestContextManagers:
         assert isinstance(group.generic, User)
 
     def test_no_dereference_context_manager_dbref(self):
-        """Ensure that DBRef items in ListFields aren't dereferenced.
-        """
+        """Ensure that DBRef items in ListFields aren't dereferenced."""
         connect("mongoenginetest")
 
         class User(Document):
@@ -134,11 +180,11 @@ class TestContextManagers:
 
         with no_dereference(Group) as Group:
             group = Group.objects.first()
-            assert all([not isinstance(m, User) for m in group.members])
+            assert all(not isinstance(m, User) for m in group.members)
             assert not isinstance(group.ref, User)
             assert not isinstance(group.generic, User)
 
-        assert all([isinstance(m, User) for m in group.members])
+        assert all(isinstance(m, User) for m in group.members)
         assert isinstance(group.ref, User)
         assert isinstance(group.generic, User)
 
@@ -216,7 +262,7 @@ class TestContextManagers:
 
     def test_query_counter_does_not_swallow_exception(self):
         with pytest.raises(TypeError):
-            with query_counter() as q:
+            with query_counter():
                 raise TypeError()
 
     def test_query_counter_temporarily_modifies_profiling_level(self):
@@ -226,12 +272,12 @@ class TestContextManagers:
         initial_profiling_level = db.profiling_level()
 
         try:
-            NEW_LEVEL = 1
-            db.set_profiling_level(NEW_LEVEL)
-            assert db.profiling_level() == NEW_LEVEL
-            with query_counter() as q:
+            new_level = 1
+            db.set_profiling_level(new_level)
+            assert db.profiling_level() == new_level
+            with query_counter():
                 assert db.profiling_level() == 2
-            assert db.profiling_level() == NEW_LEVEL
+            assert db.profiling_level() == new_level
         except Exception:
             db.set_profiling_level(
                 initial_profiling_level
@@ -281,6 +327,52 @@ class TestContextManagers:
             assert q != -1
             assert q < 1000
             assert q <= int(q)
+
+    def test_query_counter_alias(self):
+        """query_counter works properly with db aliases?"""
+        # Register a connection with db_alias testdb-1
+        register_connection("testdb-1", "mongoenginetest2")
+
+        class A(Document):
+            """Uses default db_alias"""
+
+            name = StringField()
+
+        class B(Document):
+            """Uses testdb-1 db_alias"""
+
+            name = StringField()
+            meta = {"db_alias": "testdb-1"}
+
+        A.drop_collection()
+        B.drop_collection()
+
+        with query_counter() as q:
+            assert q == 0
+            A.objects.create(name="A")
+            assert q == 1
+            a = A.objects.first()
+            assert q == 2
+            a.name = "Test A"
+            a.save()
+            assert q == 3
+            # querying the other db should'nt alter the counter
+            B.objects().first()
+            assert q == 3
+
+        with query_counter(alias="testdb-1") as q:
+            assert q == 0
+            B.objects.create(name="B")
+            assert q == 1
+            b = B.objects.first()
+            assert q == 2
+            b.name = "Test B"
+            b.save()
+            assert b.name == "Test B"
+            assert q == 3
+            # querying the other db should'nt alter the counter
+            A.objects().first()
+            assert q == 3
 
     def test_query_counter_counts_getmore_queries(self):
         connect("mongoenginetest")

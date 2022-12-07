@@ -1,5 +1,3 @@
-import six
-
 from mongoengine.errors import OperationError
 from mongoengine.queryset.base import (
     BaseQuerySet,
@@ -127,8 +125,8 @@ class QuerySet(BaseQuerySet):
         # Pull in ITER_CHUNK_SIZE docs from the database and store them in
         # the result cache.
         try:
-            for _ in six.moves.range(ITER_CHUNK_SIZE):
-                self._result_cache.append(six.next(self))
+            for _ in range(ITER_CHUNK_SIZE):
+                self._result_cache.append(next(self))
         except StopIteration:
             # Getting this exception means there are no more docs in the
             # db cursor. Set _has_more to False so that we can use that
@@ -143,18 +141,16 @@ class QuerySet(BaseQuerySet):
             getting the count
         """
         if with_limit_and_skip is False:
-            return super(QuerySet, self).count(with_limit_and_skip)
+            return super().count(with_limit_and_skip)
 
         if self._len is None:
-            self._len = super(QuerySet, self).count(with_limit_and_skip)
+            # cache the length
+            self._len = super().count(with_limit_and_skip)
 
         return self._len
 
     def no_cache(self):
-        """Convert to a non-caching queryset
-
-        .. versionadded:: 0.8.3 Convert to non caching queryset
-        """
+        """Convert to a non-caching queryset"""
         if self._result_cache is not None:
             raise OperationError("QuerySet already cached")
 
@@ -165,24 +161,18 @@ class QuerySetNoCache(BaseQuerySet):
     """A non caching QuerySet"""
 
     def cache(self):
-        """Convert to a caching queryset
-
-        .. versionadded:: 0.8.3 Convert to caching queryset
-        """
+        """Convert to a caching queryset"""
         return self._clone_into(QuerySet(self._document, self._collection))
 
     def __repr__(self):
-        """Provides the string representation of the QuerySet
-
-        .. versionchanged:: 0.6.13 Now doesnt modify the cursor
-        """
+        """Provides the string representation of the QuerySet"""
         if self._iter:
             return ".. queryset mid-iteration .."
 
         data = []
-        for _ in six.moves.range(REPR_OUTPUT_SIZE + 1):
+        for _ in range(REPR_OUTPUT_SIZE + 1):
             try:
-                data.append(six.next(self))
+                data.append(next(self))
             except StopIteration:
                 break
 

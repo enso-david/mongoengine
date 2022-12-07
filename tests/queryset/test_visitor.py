@@ -23,8 +23,7 @@ class TestQ(unittest.TestCase):
         self.Person = Person
 
     def test_empty_q(self):
-        """Ensure that empty Q objects won't hurt.
-        """
+        """Ensure that empty Q objects won't hurt."""
         q1 = Q()
         q2 = Q(age__gte=18)
         q3 = Q()
@@ -58,8 +57,7 @@ class TestQ(unittest.TestCase):
         assert Post.objects.filter(Q(created_user=user)).count() == 1
 
     def test_and_combination(self):
-        """Ensure that Q-objects correctly AND together.
-        """
+        """Ensure that Q-objects correctly AND together."""
 
         class TestDoc(Document):
             x = IntField()
@@ -89,8 +87,7 @@ class TestQ(unittest.TestCase):
         assert query.to_query(TestDoc) == mongo_query
 
     def test_or_combination(self):
-        """Ensure that Q-objects correctly OR together.
-        """
+        """Ensure that Q-objects correctly OR together."""
 
         class TestDoc(Document):
             x = IntField()
@@ -101,8 +98,7 @@ class TestQ(unittest.TestCase):
         assert query == {"$or": [{"x": {"$lt": 3}}, {"x": {"$gt": 7}}]}
 
     def test_and_or_combination(self):
-        """Ensure that Q-objects handle ANDing ORed components.
-        """
+        """Ensure that Q-objects handle ANDing ORed components."""
 
         class TestDoc(Document):
             x = IntField()
@@ -136,8 +132,7 @@ class TestQ(unittest.TestCase):
         assert 2 == TestDoc.objects(q1 & q2).count()
 
     def test_or_and_or_combination(self):
-        """Ensure that Q-objects handle ORing ANDed ORed components. :)
-        """
+        """Ensure that Q-objects handle ORing ANDed ORed components. :)"""
 
         class TestDoc(Document):
             x = IntField()
@@ -208,8 +203,7 @@ class TestQ(unittest.TestCase):
         assert test.count() == 3
 
     def test_q(self):
-        """Ensure that Q objects may be used to query for documents.
-        """
+        """Ensure that Q objects may be used to query for documents."""
 
         class BlogPost(Document):
             title = StringField()
@@ -286,8 +280,7 @@ class TestQ(unittest.TestCase):
             self.Person.objects.filter("user1")
 
     def test_q_regex(self):
-        """Ensure that Q objects can be queried using regexes.
-        """
+        """Ensure that Q objects can be queried using regexes."""
         person = self.Person(name="Guido van Rossum")
         person.save()
 
@@ -320,8 +313,7 @@ class TestQ(unittest.TestCase):
         )
 
     def test_q_lists(self):
-        """Ensure that Q objects query ListFields correctly.
-        """
+        """Ensure that Q objects query ListFields correctly."""
 
         class BlogPost(Document):
             tags = ListField(StringField())
@@ -373,6 +365,50 @@ class TestQ(unittest.TestCase):
             Item.objects.filter(postables__name="a").filter(postables__name="b").count()
             == 2
         )
+
+    def test_equality(self):
+        assert Q(name="John") == Q(name="John")
+        assert Q() == Q()
+
+    def test_inequality(self):
+        assert Q(name="John") != Q(name="Ralph")
+
+    def test_operation_equality(self):
+        q1 = Q(name="John") | Q(title="Sir") & Q(surname="Paul")
+        q2 = Q(name="John") | Q(title="Sir") & Q(surname="Paul")
+        assert q1 == q2
+
+    def test_operation_inequality(self):
+        q1 = Q(name="John") | Q(title="Sir")
+        q2 = Q(title="Sir") | Q(name="John")
+        assert q1 != q2
+
+    def test_combine_and_empty(self):
+        q = Q(x=1)
+        assert q & Q() == q
+        assert Q() & q == q
+
+    def test_combine_and_both_empty(self):
+        assert Q() & Q() == Q()
+
+    def test_combine_or_empty(self):
+        q = Q(x=1)
+        assert q | Q() == q
+        assert Q() | q == q
+
+    def test_combine_or_both_empty(self):
+        assert Q() | Q() == Q()
+
+    def test_q_bool(self):
+        assert Q(name="John")
+        assert not Q()
+
+    def test_combine_bool(self):
+        assert not Q() & Q()
+        assert Q() & Q(name="John")
+        assert Q(name="John") & Q()
+        assert Q() | Q(name="John")
+        assert Q(name="John") | Q()
 
 
 if __name__ == "__main__":

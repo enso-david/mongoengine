@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
 import pytest
-import six
 
 from mongoengine import *
 
@@ -21,8 +19,7 @@ class TestFloatField(MongoDBTestCase):
         assert 1 == TestDocument.objects(float_fld__ne=1).count()
 
     def test_validation(self):
-        """Ensure that invalid values cannot be assigned to float fields.
-        """
+        """Ensure that invalid values cannot be assigned to float fields."""
 
         class Person(Document):
             height = FloatField(min_value=0.1, max_value=3.5)
@@ -52,9 +49,8 @@ class TestFloatField(MongoDBTestCase):
 
         big_person = BigPerson()
 
-        for value, value_type in enumerate(six.integer_types):
-            big_person.height = value_type(value)
-            big_person.validate()
+        big_person.height = int(0)
+        big_person.validate()
 
         big_person.height = 2 ** 500
         big_person.validate()

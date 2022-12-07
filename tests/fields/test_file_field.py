@@ -1,19 +1,17 @@
-# -*- coding: utf-8 -*-
 import copy
 import os
 import tempfile
 import unittest
+from io import BytesIO
 
 import gridfs
 import pytest
-import six
 
 from mongoengine import *
 from mongoengine.connection import get_db
-from mongoengine.python_support import StringIO
 
 try:
-    from PIL import Image
+    from PIL import Image  # noqa: F401
 
     HAS_PIL = True
 except ImportError:
@@ -30,7 +28,7 @@ TEST_IMAGE2_PATH = os.path.join(os.path.dirname(__file__), "mongodb_leaf.png")
 def get_file(path):
     """Use a BytesIO instead of a file to allow
     to have a one-liner and avoid that the file remains opened"""
-    bytes_io = StringIO()
+    bytes_io = BytesIO()
     with open(path, "rb") as f:
         bytes_io.write(f.read())
     bytes_io.seek(0)
@@ -50,15 +48,14 @@ class TestFileField(MongoDBTestCase):
         DemoFile.objects.create()
 
     def test_file_fields(self):
-        """Ensure that file fields can be written to and their data retrieved
-        """
+        """Ensure that file fields can be written to and their data retrieved"""
 
         class PutFile(Document):
             the_file = FileField()
 
         PutFile.drop_collection()
 
-        text = six.b("Hello, World!")
+        text = b"Hello, World!"
         content_type = "text/plain"
 
         putfile = PutFile()
@@ -80,7 +77,7 @@ class TestFileField(MongoDBTestCase):
         PutFile.drop_collection()
 
         putfile = PutFile()
-        putstring = StringIO()
+        putstring = BytesIO()
         putstring.write(text)
         putstring.seek(0)
         putfile.the_file.put(putstring, content_type=content_type)
@@ -93,16 +90,15 @@ class TestFileField(MongoDBTestCase):
         result.the_file.delete()
 
     def test_file_fields_stream(self):
-        """Ensure that file fields can be written to and their data retrieved
-        """
+        """Ensure that file fields can be written to and their data retrieved"""
 
         class StreamFile(Document):
             the_file = FileField()
 
         StreamFile.drop_collection()
 
-        text = six.b("Hello, World!")
-        more_text = six.b("Foo Bar")
+        text = b"Hello, World!"
+        more_text = b"Foo Bar"
         content_type = "text/plain"
 
         streamfile = StreamFile()
@@ -137,8 +133,8 @@ class TestFileField(MongoDBTestCase):
 
         StreamFile.drop_collection()
 
-        text = six.b("Hello, World!")
-        more_text = six.b("Foo Bar")
+        text = b"Hello, World!"
+        more_text = b"Foo Bar"
 
         streamfile = StreamFile()
         streamfile.save()
@@ -151,7 +147,7 @@ class TestFileField(MongoDBTestCase):
         result = StreamFile.objects.first()
         assert streamfile == result
         assert result.the_file.read() == text + more_text
-        # self.assertEqual(result.the_file.content_type, content_type)
+        # assert result.the_file.content_type == content_type
         result.the_file.seek(0)
         assert result.the_file.tell() == 0
         assert result.the_file.read(len(text)) == text
@@ -167,8 +163,8 @@ class TestFileField(MongoDBTestCase):
         class SetFile(Document):
             the_file = FileField()
 
-        text = six.b("Hello, World!")
-        more_text = six.b("Foo Bar")
+        text = b"Hello, World!"
+        more_text = b"Foo Bar"
 
         SetFile.drop_collection()
 
@@ -196,7 +192,7 @@ class TestFileField(MongoDBTestCase):
         GridDocument.drop_collection()
 
         with tempfile.TemporaryFile() as f:
-            f.write(six.b("Hello World!"))
+            f.write(b"Hello World!")
             f.flush()
 
             # Test without default
@@ -213,7 +209,7 @@ class TestFileField(MongoDBTestCase):
             assert doc_b.the_file.grid_id == doc_c.the_file.grid_id
 
             # Test with default
-            doc_d = GridDocument(the_file=six.b(""))
+            doc_d = GridDocument(the_file=b"")
             doc_d.save()
 
             doc_e = GridDocument.objects.with_id(doc_d.id)
@@ -230,8 +226,7 @@ class TestFileField(MongoDBTestCase):
         assert ["doc_b", "doc_e"] == grid_fs.list()
 
     def test_file_uniqueness(self):
-        """Ensure that each instance of a FileField is unique
-        """
+        """Ensure that each instance of a FileField is unique"""
 
         class TestFile(Document):
             name = StringField()
@@ -240,7 +235,7 @@ class TestFileField(MongoDBTestCase):
         # First instance
         test_file = TestFile()
         test_file.name = "Hello, World!"
-        test_file.the_file.put(six.b("Hello, World!"))
+        test_file.the_file.put(b"Hello, World!")
         test_file.save()
 
         # Second instance
@@ -287,8 +282,7 @@ class TestFileField(MongoDBTestCase):
         assert test_file.the_file.get().length == 4971
 
     def test_file_boolean(self):
-        """Ensure that a boolean test of a FileField indicates its presence
-        """
+        """Ensure that a boolean test of a FileField indicates its presence"""
 
         class TestFile(Document):
             the_file = FileField()
@@ -297,7 +291,7 @@ class TestFileField(MongoDBTestCase):
 
         test_file = TestFile()
         assert not bool(test_file.the_file)
-        test_file.the_file.put(six.b("Hello, World!"), content_type="text/plain")
+        test_file.the_file.put(b"Hello, World!", content_type="text/plain")
         test_file.save()
         assert bool(test_file.the_file)
 
@@ -319,7 +313,7 @@ class TestFileField(MongoDBTestCase):
         class TestFile(Document):
             the_file = FileField()
 
-        text = six.b("Hello, World!")
+        text = b"Hello, World!"
         content_type = "text/plain"
 
         testfile = TestFile()
@@ -363,7 +357,7 @@ class TestFileField(MongoDBTestCase):
         testfile.the_file.put(text, content_type=content_type, filename="hello")
         testfile.save()
 
-        text = six.b("Bonjour, World!")
+        text = b"Bonjour, World!"
         testfile.the_file.replace(text, content_type=content_type, filename="hello")
         testfile.save()
 
@@ -387,7 +381,7 @@ class TestFileField(MongoDBTestCase):
         TestImage.drop_collection()
 
         with tempfile.TemporaryFile() as f:
-            f.write(six.b("Hello World!"))
+            f.write(b"Hello World!")
             f.flush()
 
             t = TestImage()
@@ -429,7 +423,7 @@ class TestFileField(MongoDBTestCase):
     @require_pil
     def test_image_field_resize(self):
         class TestImage(Document):
-            image = ImageField(size=(185, 37))
+            image = ImageField(size=(185, 37, True))
 
         TestImage.drop_collection()
 
@@ -471,7 +465,7 @@ class TestFileField(MongoDBTestCase):
     @require_pil
     def test_image_field_thumbnail(self):
         class TestImage(Document):
-            image = ImageField(thumbnail_size=(92, 18))
+            image = ImageField(thumbnail_size=(92, 18, True))
 
         TestImage.drop_collection()
 
@@ -503,21 +497,21 @@ class TestFileField(MongoDBTestCase):
         # First instance
         test_file = TestFile()
         test_file.name = "Hello, World!"
-        test_file.the_file.put(six.b("Hello, World!"), name="hello.txt")
+        test_file.the_file.put(b"Hello, World!", name="hello.txt")
         test_file.save()
 
         data = get_db("test_files").macumba.files.find_one()
         assert data.get("name") == "hello.txt"
 
         test_file = TestFile.objects.first()
-        assert test_file.the_file.read() == six.b("Hello, World!")
+        assert test_file.the_file.read() == b"Hello, World!"
 
         test_file = TestFile.objects.first()
-        test_file.the_file = six.b("HELLO, WORLD!")
+        test_file.the_file = b"Hello, World!"
         test_file.save()
 
         test_file = TestFile.objects.first()
-        assert test_file.the_file.read() == six.b("HELLO, WORLD!")
+        assert test_file.the_file.read() == b"Hello, World!"
 
     def test_copyable(self):
         class PutFile(Document):
@@ -525,7 +519,7 @@ class TestFileField(MongoDBTestCase):
 
         PutFile.drop_collection()
 
-        text = six.b("Hello, World!")
+        text = b"Hello, World!"
         content_type = "text/plain"
 
         putfile = PutFile()

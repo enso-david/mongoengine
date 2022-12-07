@@ -1,11 +1,8 @@
-# -*- coding: utf-8 -*-
 import unittest
 
 from bson import DBRef, ObjectId
-from six import iteritems
 
 from mongoengine import *
-from mongoengine.connection import get_db
 from mongoengine.context_managers import query_counter
 
 
@@ -19,8 +16,7 @@ class FieldTest(unittest.TestCase):
         cls.db.drop_database("mongoenginetest")
 
     def test_list_item_dereference(self):
-        """Ensure that DBRef items in ListFields are dereferenced.
-        """
+        """Ensure that DBRef items in ListFields are dereferenced."""
 
         class User(Document):
             name = StringField()
@@ -53,7 +49,7 @@ class FieldTest(unittest.TestCase):
             len(group_obj.members)
             assert q == 2
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
 
         # Document select_related
@@ -62,7 +58,7 @@ class FieldTest(unittest.TestCase):
 
             group_obj = Group.objects.first().select_related()
             assert q == 2
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
 
         # Queryset select_related
@@ -71,15 +67,14 @@ class FieldTest(unittest.TestCase):
             group_objs = Group.objects.select_related()
             assert q == 2
             for group_obj in group_objs:
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 2
 
         User.drop_collection()
         Group.drop_collection()
 
     def test_list_item_dereference_dref_false(self):
-        """Ensure that DBRef items in ListFields are dereferenced.
-        """
+        """Ensure that DBRef items in ListFields are dereferenced."""
 
         class User(Document):
             name = StringField()
@@ -104,14 +99,14 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first()
             assert q == 1
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
             assert group_obj._data["members"]._dereferenced
 
             # verifies that no additional queries gets executed
             # if we re-iterate over the ListField once it is
             # dereferenced
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
             assert group_obj._data["members"]._dereferenced
 
@@ -122,7 +117,7 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first().select_related()
 
             assert q == 2
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
 
         # Queryset select_related
@@ -131,12 +126,11 @@ class FieldTest(unittest.TestCase):
             group_objs = Group.objects.select_related()
             assert q == 2
             for group_obj in group_objs:
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 2
 
     def test_list_item_dereference_orphan_dbref(self):
-        """Ensure that orphan DBRef items in ListFields are dereferenced.
-        """
+        """Ensure that orphan DBRef items in ListFields are dereferenced."""
 
         class User(Document):
             name = StringField()
@@ -164,14 +158,14 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first()
             assert q == 1
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
             assert group_obj._data["members"]._dereferenced
 
             # verifies that no additional queries gets executed
             # if we re-iterate over the ListField once it is
             # dereferenced
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
             assert group_obj._data["members"]._dereferenced
 
@@ -179,8 +173,7 @@ class FieldTest(unittest.TestCase):
         Group.drop_collection()
 
     def test_list_item_dereference_dref_false_stores_as_type(self):
-        """Ensure that DBRef items are stored as their type
-        """
+        """Ensure that DBRef items are stored as their type"""
 
         class User(Document):
             my_id = IntField(primary_key=True)
@@ -201,8 +194,7 @@ class FieldTest(unittest.TestCase):
         assert group.members == [user]
 
     def test_handle_old_style_references(self):
-        """Ensure that DBRef items in ListFields are dereferenced.
-        """
+        """Ensure that DBRef items in ListFields are dereferenced."""
 
         class User(Document):
             name = StringField()
@@ -235,8 +227,7 @@ class FieldTest(unittest.TestCase):
         assert group.members[-1].name == "String!"
 
     def test_migrate_references(self):
-        """Example of migrating ReferenceField storage
-        """
+        """Example of migrating ReferenceField storage"""
 
         # Create some sample data
         class User(Document):
@@ -281,8 +272,7 @@ class FieldTest(unittest.TestCase):
         assert isinstance(raw_data["members"][0], ObjectId)
 
     def test_recursive_reference(self):
-        """Ensure that ReferenceFields can reference their own documents.
-        """
+        """Ensure that ReferenceFields can reference their own documents."""
 
         class Employee(Document):
             name = StringField()
@@ -372,8 +362,7 @@ class FieldTest(unittest.TestCase):
         assert Post.objects.all()[0].user_lists == [[u1, u2], [u3]]
 
     def test_circular_reference(self):
-        """Ensure you can handle circular references
-        """
+        """Ensure you can handle circular references"""
 
         class Relation(EmbeddedDocument):
             name = StringField()
@@ -406,8 +395,7 @@ class FieldTest(unittest.TestCase):
         assert "[<Person: Mother>, <Person: Daughter>]" == "%s" % Person.objects()
 
     def test_circular_reference_on_self(self):
-        """Ensure you can handle circular references
-        """
+        """Ensure you can handle circular references"""
 
         class Person(Document):
             name = StringField()
@@ -428,13 +416,13 @@ class FieldTest(unittest.TestCase):
 
         daughter.relations.append(mother)
         daughter.relations.append(daughter)
+        assert daughter._get_changed_fields() == ["relations"]
         daughter.save()
 
         assert "[<Person: Mother>, <Person: Daughter>]" == "%s" % Person.objects()
 
     def test_circular_tree_reference(self):
-        """Ensure you can handle circular references with more than one level
-        """
+        """Ensure you can handle circular references with more than one level"""
 
         class Other(EmbeddedDocument):
             name = StringField()
@@ -517,10 +505,10 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first()
             assert q == 1
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
             for m in group_obj.members:
@@ -533,10 +521,10 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first().select_related()
             assert q == 4
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
             for m in group_obj.members:
@@ -550,18 +538,17 @@ class FieldTest(unittest.TestCase):
             assert q == 4
 
             for group_obj in group_objs:
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 4
 
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 4
 
                 for m in group_obj.members:
                     assert "User" in m.__class__.__name__
 
     def test_generic_reference_orphan_dbref(self):
-        """Ensure that generic orphan DBRef items in ListFields are dereferenced.
-        """
+        """Ensure that generic orphan DBRef items in ListFields are dereferenced."""
 
         class UserA(Document):
             name = StringField()
@@ -605,11 +592,11 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first()
             assert q == 1
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
             assert group_obj._data["members"]._dereferenced
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
             assert group_obj._data["members"]._dereferenced
 
@@ -661,10 +648,10 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first()
             assert q == 1
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
             for m in group_obj.members:
@@ -677,10 +664,10 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first().select_related()
             assert q == 4
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
             for m in group_obj.members:
@@ -694,10 +681,10 @@ class FieldTest(unittest.TestCase):
             assert q == 4
 
             for group_obj in group_objs:
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 4
 
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 4
 
                 for m in group_obj.members:
@@ -736,10 +723,10 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first()
             assert q == 1
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
 
-            for k, m in iteritems(group_obj.members):
+            for _, m in group_obj.members.items():
                 assert isinstance(m, User)
 
         # Document select_related
@@ -749,10 +736,10 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first().select_related()
             assert q == 2
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
 
-            for k, m in iteritems(group_obj.members):
+            for k, m in group_obj.members.items():
                 assert isinstance(m, User)
 
         # Queryset select_related
@@ -763,10 +750,10 @@ class FieldTest(unittest.TestCase):
             assert q == 2
 
             for group_obj in group_objs:
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 2
 
-                for k, m in iteritems(group_obj.members):
+                for k, m in group_obj.members.items():
                     assert isinstance(m, User)
 
         User.drop_collection()
@@ -814,13 +801,13 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first()
             assert q == 1
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
-            for k, m in iteritems(group_obj.members):
+            for k, m in group_obj.members.items():
                 assert "User" in m.__class__.__name__
 
         # Document select_related
@@ -830,13 +817,13 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first().select_related()
             assert q == 4
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
-            for k, m in iteritems(group_obj.members):
+            for k, m in group_obj.members.items():
                 assert "User" in m.__class__.__name__
 
         # Queryset select_related
@@ -847,13 +834,13 @@ class FieldTest(unittest.TestCase):
             assert q == 4
 
             for group_obj in group_objs:
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 4
 
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 4
 
-                for k, m in iteritems(group_obj.members):
+                for k, m in group_obj.members.items():
                     assert "User" in m.__class__.__name__
 
         Group.objects.delete()
@@ -865,7 +852,7 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first()
             assert q == 1
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 1
             assert group_obj.members == {}
 
@@ -904,13 +891,13 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first()
             assert q == 1
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
 
-            for k, m in iteritems(group_obj.members):
+            for k, m in group_obj.members.items():
                 assert isinstance(m, UserA)
 
         # Document select_related
@@ -920,13 +907,13 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first().select_related()
             assert q == 2
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 2
 
-            for k, m in iteritems(group_obj.members):
+            for k, m in group_obj.members.items():
                 assert isinstance(m, UserA)
 
         # Queryset select_related
@@ -937,13 +924,13 @@ class FieldTest(unittest.TestCase):
             assert q == 2
 
             for group_obj in group_objs:
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 2
 
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 2
 
-                for k, m in iteritems(group_obj.members):
+                for _, m in group_obj.members.items():
                     assert isinstance(m, UserA)
 
         UserA.drop_collection()
@@ -991,13 +978,13 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first()
             assert q == 1
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
-            for k, m in iteritems(group_obj.members):
+            for _, m in group_obj.members.items():
                 assert "User" in m.__class__.__name__
 
         # Document select_related
@@ -1007,13 +994,13 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first().select_related()
             assert q == 4
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 4
 
-            for k, m in iteritems(group_obj.members):
+            for _, m in group_obj.members.items():
                 assert "User" in m.__class__.__name__
 
         # Queryset select_related
@@ -1024,13 +1011,13 @@ class FieldTest(unittest.TestCase):
             assert q == 4
 
             for group_obj in group_objs:
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 4
 
-                [m for m in group_obj.members]
+                _ = [m for m in group_obj.members]
                 assert q == 4
 
-                for k, m in iteritems(group_obj.members):
+                for _, m in group_obj.members.items():
                     assert "User" in m.__class__.__name__
 
         Group.objects.delete()
@@ -1042,7 +1029,7 @@ class FieldTest(unittest.TestCase):
             group_obj = Group.objects.first()
             assert q == 1
 
-            [m for m in group_obj.members]
+            _ = [m for m in group_obj.members]
             assert q == 1
 
         UserA.drop_collection()
@@ -1171,8 +1158,7 @@ class FieldTest(unittest.TestCase):
         assert msg.author.name == "new-name"
 
     def test_list_lookup_not_checked_in_map(self):
-        """Ensure we dereference list data correctly
-        """
+        """Ensure we dereference list data correctly"""
 
         class Comment(Document):
             id = IntField(primary_key=True)
@@ -1194,8 +1180,7 @@ class FieldTest(unittest.TestCase):
         assert 1 == msg.comments[1].id
 
     def test_list_item_dereference_dref_false_save_doesnt_cause_extra_queries(self):
-        """Ensure that DBRef items in ListFields are dereferenced.
-        """
+        """Ensure that DBRef items in ListFields are dereferenced."""
 
         class User(Document):
             name = StringField()
@@ -1224,8 +1209,7 @@ class FieldTest(unittest.TestCase):
             assert q == 2
 
     def test_list_item_dereference_dref_true_save_doesnt_cause_extra_queries(self):
-        """Ensure that DBRef items in ListFields are dereferenced.
-        """
+        """Ensure that DBRef items in ListFields are dereferenced."""
 
         class User(Document):
             name = StringField()
@@ -1337,7 +1321,7 @@ class FieldTest(unittest.TestCase):
         BrandGroup.drop_collection()
 
         brand1 = Brand(title="Moschino").save()
-        brand2 = Brand(title=u"Денис Симачёв").save()
+        brand2 = Brand(title="Денис Симачёв").save()
 
         BrandGroup(title="top_brands", brands=[brand1, brand2]).save()
         brand_groups = BrandGroup.objects().all()

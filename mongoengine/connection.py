@@ -1,6 +1,5 @@
 from pymongo import MongoClient, ReadPreference, uri_parser
 from pymongo.database import _check_name
-import six
 
 __all__ = [
     "DEFAULT_CONNECTION_NAME",
@@ -12,6 +11,7 @@ __all__ = [
     "get_connection",
     "get_db",
     "register_connection",
+    "TransactionSession"
 ]
 
 
@@ -39,8 +39,8 @@ def _check_db_name(name):
     """Check if a database name is valid.
     This functionality is copied from pymongo Database class constructor.
     """
-    if not isinstance(name, six.string_types):
-        raise TypeError("name must be an instance of %s" % six.string_types)
+    if not isinstance(name, str):
+        raise TypeError("name must be an instance of %s" % str)
     elif name != "$external":
         _check_name(name)
 
@@ -55,7 +55,7 @@ def _get_connection_settings(
     password=None,
     authentication_source=None,
     authentication_mechanism=None,
-    **kwargs
+    **kwargs,
 ):
     """Get the connection settings as a dict
 
@@ -75,8 +75,6 @@ def _get_connection_settings(
     : param kwargs: ad-hoc parameters to be passed into the pymongo driver,
         for example maxpoolsize, tz_aware, etc. See the documentation
         for pymongo's `MongoClient` for a full list.
-
-    .. versionchanged:: 0.10.6 - added mongomock support
     """
     conn_settings = {
         "name": name or db or DEFAULT_DATABASE_NAME,
@@ -93,7 +91,7 @@ def _get_connection_settings(
     conn_host = conn_settings["host"]
 
     # Host can be a list or a string, so if string, force to a list.
-    if isinstance(conn_host, six.string_types):
+    if isinstance(conn_host, str):
         conn_host = [conn_host]
 
     resolved_hosts = []
@@ -148,7 +146,7 @@ def _get_connection_settings(
                 # TODO simplify the code below once we drop support for
                 # PyMongo v3.4.
                 read_pf_mode = uri_options["readpreference"]
-                if isinstance(read_pf_mode, six.string_types):
+                if isinstance(read_pf_mode, str):
                     read_pf_mode = read_pf_mode.lower()
                 for preference in read_preferences:
                     if (
@@ -180,7 +178,7 @@ def register_connection(
     password=None,
     authentication_source=None,
     authentication_mechanism=None,
-    **kwargs
+    **kwargs,
 ):
     """Register the connection settings.
 
@@ -202,8 +200,6 @@ def register_connection(
     : param kwargs: ad-hoc parameters to be passed into the pymongo driver,
         for example maxpoolsize, tz_aware, etc. See the documentation
         for pymongo's `MongoClient` for a full list.
-
-    .. versionchanged:: 0.10.6 - added mongomock support
     """
     conn_settings = _get_connection_settings(
         db=db,
@@ -215,7 +211,7 @@ def register_connection(
         password=password,
         authentication_source=authentication_source,
         authentication_mechanism=authentication_mechanism,
-        **kwargs
+        **kwargs,
     )
     _connection_settings[alias] = conn_settings
 
@@ -318,7 +314,7 @@ def _create_connection(alias, connection_class, **connection_settings):
     try:
         return connection_class(**connection_settings)
     except Exception as e:
-        raise ConnectionFailure("Cannot connect to database %s :\n%s" % (alias, e))
+        raise ConnectionFailure(f"Cannot connect to database {alias} :\n{e}")
 
 
 def _find_existing_connection(connection_settings):
@@ -387,8 +383,6 @@ def connect(db=None, alias=DEFAULT_CONNECTION_NAME, **kwargs):
 
     See the docstring for `register_connection` for more details about all
     supported kwargs.
-
-    .. versionchanged:: 0.6 - added multiple database support.
     """
     if alias in _connections:
         prev_conn_setting = _connection_settings[alias]
@@ -396,14 +390,30 @@ def connect(db=None, alias=DEFAULT_CONNECTION_NAME, **kwargs):
 
         if new_conn_settings != prev_conn_setting:
             err_msg = (
-                u"A different connection with alias `{}` was already "
-                u"registered. Use disconnect() first"
+                "A different connection with alias `{}` was already "
+                "registered. Use disconnect() first"
             ).format(alias)
             raise ConnectionFailure(err_msg)
     else:
         register_connection(alias, db, **kwargs)
 
     return get_connection(alias)
+
+
+class TransactionSession:
+    def __init__(self, alias=DEFAULT_CONNECTION_NAME):
+        client = get_connection(alias)
+        self.session = client.start_session()
+        self.transaction = self.session.start_transaction()
+
+    def __enter__(self):
+        self.session.__enter__()
+        self.transaction.__enter__()
+        return self.session
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.transaction.__exit__(exc_type, exc_val, exc_tb)
+        self.session.__exit__(exc_type, exc_val, exc_tb)
 
 
 # Support old naming convention

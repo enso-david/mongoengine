@@ -1,11 +1,8 @@
 import re
-import warnings
 
 from bson.dbref import DBRef
 import pymongo
 from pymongo.read_preferences import ReadPreference
-import six
-from six import iteritems
 
 from mongoengine import signals
 from mongoengine.base import (
@@ -44,7 +41,7 @@ def includes_cls(fields):
     """Helper function used for ensuring and comparing indexes."""
     first_field = None
     if len(fields):
-        if isinstance(fields[0], six.string_types):
+        if isinstance(fields[0], str):
             first_field = fields[0]
         elif isinstance(fields[0], (list, tuple)) and len(fields[0]):
             first_field = fields[0][0]
@@ -55,8 +52,8 @@ class InvalidCollectionError(Exception):
     pass
 
 
-class EmbeddedDocument(six.with_metaclass(DocumentMetaclass, BaseDocument)):
-    """A :class:`~mongoengine.Document` that isn't stored in its own
+class EmbeddedDocument(BaseDocument, metaclass=DocumentMetaclass):
+    r"""A :class:`~mongoengine.Document` that isn't stored in its own
     collection.  :class:`~mongoengine.EmbeddedDocument`\ s should be used as
     fields on :class:`~mongoengine.Document`\ s through the
     :class:`~mongoengine.EmbeddedDocumentField` field type.
@@ -71,7 +68,6 @@ class EmbeddedDocument(six.with_metaclass(DocumentMetaclass, BaseDocument)):
 
     __slots__ = ("_instance",)
 
-    # The __metaclass__ attribute is removed by 2to3 when running with Python3
     # my_metaclass is defined so that metaclass can be queried in Python 2 & 3
     my_metaclass = DocumentMetaclass
 
@@ -82,7 +78,7 @@ class EmbeddedDocument(six.with_metaclass(DocumentMetaclass, BaseDocument)):
     __hash__ = None
 
     def __init__(self, *args, **kwargs):
-        super(EmbeddedDocument, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self._instance = None
         self._changed_fields = []
 
@@ -95,7 +91,7 @@ class EmbeddedDocument(six.with_metaclass(DocumentMetaclass, BaseDocument)):
         return not self.__eq__(other)
 
     def to_mongo(self, *args, **kwargs):
-        data = super(EmbeddedDocument, self).to_mongo(*args, **kwargs)
+        data = super().to_mongo(*args, **kwargs)
 
         # remove _id from the SON if it's in it and it's None
         if "_id" in data and data["_id"] is None:
@@ -104,7 +100,7 @@ class EmbeddedDocument(six.with_metaclass(DocumentMetaclass, BaseDocument)):
         return data
 
 
-class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
+class Document(BaseDocument, metaclass=TopLevelDocumentMetaclass):
     """The base class used for defining the structure and properties of
     collections of documents stored in MongoDB. Inherit from this class, and
     add fields as class attributes to define a document's structure.
@@ -113,7 +109,7 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
 
     By default, the MongoDB collection used to store documents created using a
     :class:`~mongoengine.Document` subclass will be the name of the subclass
-    converted to lowercase. A different collection may be specified by
+    converted to snake_case. A different collection may be specified by
     providing :attr:`collection` to the :attr:`meta` dictionary in the class
     definition.
 
@@ -156,7 +152,6 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
     in the :attr:`meta` dictionary.
     """
 
-    # The __metaclass__ attribute is removed by 2to3 when running with Python3
     # my_metaclass is defined so that metaclass can be queried in Python 2 & 3
     my_metaclass = TopLevelDocumentMetaclass
 
@@ -260,7 +255,7 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
         return db.create_collection(collection_name, **opts)
 
     def to_mongo(self, *args, **kwargs):
-        data = super(Document, self).to_mongo(*args, **kwargs)
+        data = super().to_mongo(*args, **kwargs)
 
         # If '_id' is None, try and set it from self._data. If that
         # doesn't exist either, remove '_id' from the SON completely.
@@ -272,7 +267,7 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
 
         return data
 
-    def modify(self, query=None, **update):
+    def modify(self, query=None, session=None, **update):
         """Perform an atomic update of the document in the database and reload
         the document object using updated version.
 
@@ -285,6 +280,7 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
         :param query: the update will be performed only if the document in the
             database matches the query
         :param update: Django-style update keyword arguments
+        :param session: (optional) PyMongo session to use for transactions
         """
         if query is None:
             query = {}
@@ -305,7 +301,7 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
         # Need to add shard key to query, or you get an error
         query.update(self._object_key)
 
-        updated = self._qs(**query).modify(new=True, **update)
+        updated = self._qs(**query).session(session).modify(new=True, **update)
         if updated is None:
             return False
 
@@ -328,11 +324,12 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
         _refs=None,
         save_condition=None,
         signal_kwargs=None,
+        session=None,
         **kwargs
     ):
         """Save the :class:`~mongoengine.Document` to the database. If the
         document already exists, it will be updated, otherwise it will be
-        created.
+        created. Returns the saved object instance.
 
         :param force_insert: only try to create a new document, don't allow
             updates of existing documents.
@@ -357,6 +354,7 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
             Raises :class:`OperationError` if the conditions are not satisfied
         :param signal_kwargs: (optional) kwargs dictionary to be passed to
             the signal calls.
+        :param session: (optional) PyMongo session to use for transactions
 
         .. versionchanged:: 0.5
             In existing documents it only saves changed fields using
@@ -371,15 +369,6 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
             meta['cascade'] = True.  Also you can pass different kwargs to
             the cascade save using cascade_kwargs which overwrites the
             existing kwargs with custom values.
-        .. versionchanged:: 0.8.5
-            Optional save_condition that only overwrites existing documents
-            if the condition is satisfied in the current db record.
-        .. versionchanged:: 0.10
-            :class:`OperationError` exception raised if save_condition fails.
-        .. versionchanged:: 0.10.1
-            :class: save_condition failure now raises a `SaveConditionError`
-        .. versionchanged:: 0.10.7
-            Add signal_kwargs argument
         """
         signal_kwargs = signal_kwargs or {}
 
@@ -409,10 +398,10 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
         try:
             # Save a new document or update an existing one
             if created:
-                object_id = self._save_create(doc, force_insert, write_concern)
+                object_id = self._save_create(doc, force_insert, write_concern, session=session)
             else:
                 object_id, created = self._save_update(
-                    doc, save_condition, write_concern
+                    doc, save_condition, write_concern, session=session
                 )
 
             if cascade is None:
@@ -424,6 +413,7 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
                     "validate": validate,
                     "write_concern": write_concern,
                     "cascade": cascade,
+                    "session": session
                 }
                 if cascade_kwargs:  # Allow granular control over cascades
                     kwargs.update(cascade_kwargs)
@@ -431,16 +421,16 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
                 self.cascade_save(**kwargs)
 
         except pymongo.errors.DuplicateKeyError as err:
-            message = u"Tried to save duplicate unique keys (%s)"
-            raise NotUniqueError(message % six.text_type(err))
+            message = "Tried to save duplicate unique keys (%s)"
+            raise NotUniqueError(message % err)
         except pymongo.errors.OperationFailure as err:
             message = "Could not save document (%s)"
-            if re.match("^E1100[01] duplicate key", six.text_type(err)):
+            if re.match("^E1100[01] duplicate key", str(err)):
                 # E11000 - duplicate key error index
                 # E11001 - duplicate key on update
-                message = u"Tried to save duplicate unique keys (%s)"
-                raise NotUniqueError(message % six.text_type(err))
-            raise OperationError(message % six.text_type(err))
+                message = "Tried to save duplicate unique keys (%s)"
+                raise NotUniqueError(message % err)
+            raise OperationError(message % err)
 
         # Make sure we store the PK on this document now that it's saved
         id_field = self._meta["id_field"]
@@ -456,7 +446,7 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
 
         return self
 
-    def _save_create(self, doc, force_insert, write_concern):
+    def _save_create(self, doc, force_insert, write_concern, session=None):
         """Save a new document.
 
         Helper method, should only be used inside save().
@@ -464,17 +454,17 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
         collection = self._get_collection()
         with set_write_concern(collection, write_concern) as wc_collection:
             if force_insert:
-                return wc_collection.insert_one(doc).inserted_id
+                return wc_collection.insert_one(doc, session=session).inserted_id
             # insert_one will provoke UniqueError alongside save does not
             # therefore, it need to catch and call replace_one.
             if "_id" in doc:
-                raw_object = wc_collection.find_one_and_replace(
-                    {"_id": doc["_id"]}, doc
-                )
+                select_dict = {"_id": doc["_id"]}
+                select_dict = self._integrate_shard_key(doc, select_dict)
+                raw_object = wc_collection.find_one_and_replace(select_dict, doc, session=session)
                 if raw_object:
                     return doc["_id"]
 
-            object_id = wc_collection.insert_one(doc).inserted_id
+            object_id = wc_collection.insert_one(doc, session=session).inserted_id
 
         return object_id
 
@@ -493,7 +483,24 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
 
         return update_doc
 
-    def _save_update(self, doc, save_condition, write_concern):
+    def _integrate_shard_key(self, doc, select_dict):
+        """Integrates the collection's shard key to the `select_dict`, which will be used for the query.
+        The value from the shard key is taken from the `doc` and finally the select_dict is returned.
+        """
+
+        # Need to add shard key to query, or you get an error
+        shard_key = self._meta.get("shard_key", tuple())
+        for k in shard_key:
+            path = self._lookup_field(k.split("."))
+            actual_key = [p.db_field for p in path]
+            val = doc
+            for ak in actual_key:
+                val = val[ak]
+            select_dict[".".join(actual_key)] = val
+
+        return select_dict
+
+    def _save_update(self, doc, save_condition, write_concern, session=None):
         """Update an existing document.
 
         Helper method, should only be used inside save().
@@ -508,22 +515,14 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
 
         select_dict["_id"] = object_id
 
-        # Need to add shard key to query, or you get an error
-        shard_key = self._meta.get("shard_key", tuple())
-        for k in shard_key:
-            path = self._lookup_field(k.split("."))
-            actual_key = [p.db_field for p in path]
-            val = doc
-            for ak in actual_key:
-                val = val[ak]
-            select_dict[".".join(actual_key)] = val
+        select_dict = self._integrate_shard_key(doc, select_dict)
 
         update_doc = self._get_update_doc()
         if update_doc:
             upsert = save_condition is None
             with set_write_concern(collection, write_concern) as wc_collection:
                 last_error = wc_collection.update_one(
-                    select_dict, update_doc, upsert=upsert
+                    select_dict, update_doc, upsert=upsert, session=session
                 ).raw_result
             if not upsert and last_error["n"] == 0:
                 raise SaveConditionError(
@@ -559,7 +558,7 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
             if not getattr(ref, "_changed_fields", True):
                 continue
 
-            ref_id = "%s,%s" % (ref.__class__.__name__, str(ref._data))
+            ref_id = "{},{}".format(ref.__class__.__name__, str(ref._data))
             if ref and ref_id not in _refs:
                 _refs.append(ref_id)
                 kwargs["_refs"] = _refs
@@ -595,24 +594,26 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
             select_dict["__".join(field_parts)] = val
         return select_dict
 
-    def update(self, **kwargs):
+    def update(self, session=None, **kwargs):
         """Performs an update on the :class:`~mongoengine.Document`
         A convenience wrapper to :meth:`~mongoengine.QuerySet.update`.
 
         Raises :class:`OperationError` if called on an object that has not yet
         been saved.
+
+        :param session: (optional) PyMongo session to use for transactions
         """
         if self.pk is None:
             if kwargs.get("upsert", False):
                 query = self.to_mongo()
                 if "_cls" in query:
                     del query["_cls"]
-                return self._qs.filter(**query).update_one(**kwargs)
+                return self._qs.filter(**query).session(session).update_one(**kwargs)
             else:
                 raise OperationError("attempt to update a document not yet saved")
 
         # Need to add shard key to query, or you get an error
-        return self._qs.filter(**self._object_key).update_one(**kwargs)
+        return self._qs.filter(**self._object_key).session(session).update_one(**kwargs)
 
     def delete(self, signal_kwargs=None, **write_concern):
         """Delete the :class:`~mongoengine.Document` from the database. This
@@ -625,16 +626,13 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
             For example, ``save(..., w: 2, fsync: True)`` will
             wait until at least two servers have recorded the write and
             will force an fsync on the primary server.
-
-        .. versionchanged:: 0.10.7
-            Add signal_kwargs argument
         """
         signal_kwargs = signal_kwargs or {}
         signals.pre_delete.send(self.__class__, document=self, **signal_kwargs)
 
         # Delete FileFields separately
         FileField = _import_class("FileField")
-        for name, field in iteritems(self._fields):
+        for name, field in self._fields.items():
             if isinstance(field, FileField):
                 getattr(self, name).delete()
 
@@ -643,7 +641,7 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
                 write_concern=write_concern, _from_doc_delete=True
             )
         except pymongo.errors.OperationFailure as err:
-            message = u"Could not delete document (%s)" % err.message
+            message = "Could not delete document (%s)" % err.args
             raise OperationError(message)
         signals.post_delete.send(self.__class__, document=self, **signal_kwargs)
 
@@ -709,8 +707,6 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
     def select_related(self, max_depth=1):
         """Handles dereferencing of :class:`~bson.dbref.DBRef` objects to
         a maximum depth in order to cut down the number queries to mongodb.
-
-        .. versionadded:: 0.5
         """
         DeReference = _import_class("DeReference")
         DeReference()([self], max_depth + 1)
@@ -721,10 +717,6 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
 
         :param fields: (optional) args list of fields to reload
         :param max_depth: (optional) depth of dereferencing to follow
-
-        .. versionadded:: 0.1.2
-        .. versionchanged:: 0.6  Now chainable
-        .. versionchanged:: 0.9  Can provide specific fields to reload
         """
         max_depth = 1
         if fields and isinstance(fields[0], int):
@@ -826,9 +818,6 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
 
         Raises :class:`OperationError` if the document has no collection set
         (i.g. if it is `abstract`)
-
-        .. versionchanged:: 0.10.7
-            :class:`OperationError` exception raised if no collection available
         """
         coll_name = cls._get_collection_name()
         if not coll_name:
@@ -851,17 +840,13 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
         index_spec = cls._build_index_spec(keys)
         index_spec = index_spec.copy()
         fields = index_spec.pop("fields")
-        drop_dups = kwargs.get("drop_dups", False)
-        if drop_dups:
-            msg = "drop_dups is deprecated and is removed when using PyMongo 3+."
-            warnings.warn(msg, DeprecationWarning)
         index_spec["background"] = background
         index_spec.update(kwargs)
 
         return cls._get_collection().create_index(fields, **index_spec)
 
     @classmethod
-    def ensure_index(cls, key_or_list, drop_dups=False, background=False, **kwargs):
+    def ensure_index(cls, key_or_list, background=False, **kwargs):
         """Ensure that the given indexes are in place. Deprecated in favour
         of create_index.
 
@@ -869,12 +854,7 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
             construct a multi-field index); keys may be prefixed with a **+**
             or a **-** to determine the index ordering
         :param background: Allows index creation in the background
-        :param drop_dups: Was removed/ignored with MongoDB >2.7.5. The value
-            will be removed if PyMongo3+ is used
         """
-        if drop_dups:
-            msg = "drop_dups is deprecated and is removed when using PyMongo 3+."
-            warnings.warn(msg, DeprecationWarning)
         return cls.create_index(key_or_list, background=background, **kwargs)
 
     @classmethod
@@ -887,12 +867,8 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
                   `auto_create_index` to False in the documents meta data
         """
         background = cls._meta.get("index_background", False)
-        drop_dups = cls._meta.get("index_drop_dups", False)
         index_opts = cls._meta.get("index_opts") or {}
         index_cls = cls._meta.get("index_cls", True)
-        if drop_dups:
-            msg = "drop_dups is deprecated and is removed when using PyMongo 3+."
-            warnings.warn(msg, DeprecationWarning)
 
         collection = cls._get_collection()
         # 746: when connection is via mongos, the read preference is not necessarily an indication that
@@ -936,7 +912,7 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
 
     @classmethod
     def list_indexes(cls):
-        """ Lists all of the indexes that should be created for given
+        """Lists all of the indexes that should be created for given
         collection. It includes all the indexes from super- and sub-classes.
         """
         if cls._meta.get("abstract"):
@@ -992,16 +968,16 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
                     indexes.append(index)
 
         # finish up by appending { '_id': 1 } and { '_cls': 1 }, if needed
-        if [(u"_id", 1)] not in indexes:
-            indexes.append([(u"_id", 1)])
+        if [("_id", 1)] not in indexes:
+            indexes.append([("_id", 1)])
         if cls._meta.get("index_cls", True) and cls._meta.get("allow_inheritance"):
-            indexes.append([(u"_cls", 1)])
+            indexes.append([("_cls", 1)])
 
         return indexes
 
     @classmethod
     def compare_indexes(cls):
-        """ Compares the indexes defined in MongoEngine with the ones
+        """Compares the indexes defined in MongoEngine with the ones
         existing in the database. Returns any missing/extra indexes.
         """
 
@@ -1019,19 +995,19 @@ class Document(six.with_metaclass(TopLevelDocumentMetaclass, BaseDocument)):
         extra = [index for index in existing if index not in required]
 
         # if { _cls: 1 } is missing, make sure it's *really* necessary
-        if [(u"_cls", 1)] in missing:
+        if [("_cls", 1)] in missing:
             cls_obsolete = False
             for index in existing:
                 if includes_cls(index) and index not in extra:
                     cls_obsolete = True
                     break
             if cls_obsolete:
-                missing.remove([(u"_cls", 1)])
+                missing.remove([("_cls", 1)])
 
         return {"missing": missing, "extra": extra}
 
 
-class DynamicDocument(six.with_metaclass(TopLevelDocumentMetaclass, Document)):
+class DynamicDocument(Document, metaclass=TopLevelDocumentMetaclass):
     """A Dynamic Document class allowing flexible, expandable and uncontrolled
     schemas.  As a :class:`~mongoengine.Document` subclass, acts in the same
     way as an ordinary document but has expanded style properties.  Any data
@@ -1045,7 +1021,6 @@ class DynamicDocument(six.with_metaclass(TopLevelDocumentMetaclass, Document)):
         There is one caveat on Dynamic Documents: undeclared fields cannot start with `_`
     """
 
-    # The __metaclass__ attribute is removed by 2to3 when running with Python3
     # my_metaclass is defined so that metaclass can be queried in Python 2 & 3
     my_metaclass = TopLevelDocumentMetaclass
 
@@ -1060,16 +1035,15 @@ class DynamicDocument(six.with_metaclass(TopLevelDocumentMetaclass, Document)):
             setattr(self, field_name, None)
             self._dynamic_fields[field_name].null = False
         else:
-            super(DynamicDocument, self).__delattr__(*args, **kwargs)
+            super().__delattr__(*args, **kwargs)
 
 
-class DynamicEmbeddedDocument(six.with_metaclass(DocumentMetaclass, EmbeddedDocument)):
+class DynamicEmbeddedDocument(EmbeddedDocument, metaclass=DocumentMetaclass):
     """A Dynamic Embedded Document class allowing flexible, expandable and
     uncontrolled schemas. See :class:`~mongoengine.DynamicDocument` for more
     information about dynamic documents.
     """
 
-    # The __metaclass__ attribute is removed by 2to3 when running with Python3
     # my_metaclass is defined so that metaclass can be queried in Python 2 & 3
     my_metaclass = DocumentMetaclass
 
@@ -1089,7 +1063,7 @@ class DynamicEmbeddedDocument(six.with_metaclass(DocumentMetaclass, EmbeddedDocu
             setattr(self, field_name, None)
 
 
-class MapReduceDocument(object):
+class MapReduceDocument:
     """A document returned from a map/reduce query.
 
     :param collection: An instance of :class:`~pymongo.Collection`
@@ -1098,8 +1072,6 @@ class MapReduceDocument(object):
                 an ``ObjectId`` found in the given ``collection``,
                 the object can be accessed via the ``object`` property.
     :param value: The result(s) for this key.
-
-    .. versionadded:: 0.3
     """
 
     def __init__(self, document, collection, key, value):

@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
 import unittest
 from datetime import datetime
 
 from pymongo.collation import Collation
 from pymongo.errors import OperationFailure
 import pytest
-from six import iteritems
 
 from mongoengine import *
 from mongoengine.connection import get_db
@@ -59,7 +57,7 @@ class TestIndexes(unittest.TestCase):
         info = BlogPost.objects._collection.index_information()
         # _id, '-date', 'tags', ('cat', 'date')
         assert len(info) == 4
-        info = [value["key"] for key, value in iteritems(info)]
+        info = [value["key"] for key, value in info.items()]
         for expected in expected_specs:
             assert expected["fields"] in info
 
@@ -87,7 +85,7 @@ class TestIndexes(unittest.TestCase):
         # the indices on -date and tags will both contain
         # _cls as first element in the key
         assert len(info) == 4
-        info = [value["key"] for key, value in iteritems(info)]
+        info = [value["key"] for key, value in info.items()]
         for expected in expected_specs:
             assert expected["fields"] in info
 
@@ -102,7 +100,7 @@ class TestIndexes(unittest.TestCase):
 
         ExtendedBlogPost.ensure_indexes()
         info = ExtendedBlogPost.objects._collection.index_information()
-        info = [value["key"] for key, value in iteritems(info)]
+        info = [value["key"] for key, value in info.items()]
         for expected in expected_specs:
             assert expected["fields"] in info
 
@@ -173,8 +171,7 @@ class TestIndexes(unittest.TestCase):
         assert MyDoc._meta["index_specs"] == [{"fields": [("keywords", 1)]}]
 
     def test_embedded_document_index_meta(self):
-        """Ensure that embedded document indexes are created explicitly
-        """
+        """Ensure that embedded document indexes are created explicitly"""
 
         class Rank(EmbeddedDocument):
             title = StringField(required=True)
@@ -192,12 +189,11 @@ class TestIndexes(unittest.TestCase):
         # Indexes are lazy so use list() to perform query
         list(Person.objects)
         info = Person.objects._collection.index_information()
-        info = [value["key"] for key, value in iteritems(info)]
+        info = [value["key"] for key, value in info.items()]
         assert [("rank.title", 1)] in info
 
     def test_explicit_geo2d_index(self):
-        """Ensure that geo2d indexes work when created via meta[indexes]
-        """
+        """Ensure that geo2d indexes work when created via meta[indexes]"""
 
         class Place(Document):
             location = DictField()
@@ -207,12 +203,11 @@ class TestIndexes(unittest.TestCase):
 
         Place.ensure_indexes()
         info = Place._get_collection().index_information()
-        info = [value["key"] for key, value in iteritems(info)]
+        info = [value["key"] for key, value in info.items()]
         assert [("location.point", "2d")] in info
 
     def test_explicit_geo2d_index_embedded(self):
-        """Ensure that geo2d indexes work when created via meta[indexes]
-        """
+        """Ensure that geo2d indexes work when created via meta[indexes]"""
 
         class EmbeddedLocation(EmbeddedDocument):
             location = DictField()
@@ -227,12 +222,11 @@ class TestIndexes(unittest.TestCase):
 
         Place.ensure_indexes()
         info = Place._get_collection().index_information()
-        info = [value["key"] for key, value in iteritems(info)]
+        info = [value["key"] for key, value in info.items()]
         assert [("current.location.point", "2d")] in info
 
     def test_explicit_geosphere_index(self):
-        """Ensure that geosphere indexes work when created via meta[indexes]
-        """
+        """Ensure that geosphere indexes work when created via meta[indexes]"""
 
         class Place(Document):
             location = DictField()
@@ -244,12 +238,11 @@ class TestIndexes(unittest.TestCase):
 
         Place.ensure_indexes()
         info = Place._get_collection().index_information()
-        info = [value["key"] for key, value in iteritems(info)]
+        info = [value["key"] for key, value in info.items()]
         assert [("location.point", "2dsphere")] in info
 
     def test_explicit_geohaystack_index(self):
-        """Ensure that geohaystack indexes work when created via meta[indexes]
-        """
+        """Ensure that geohaystack indexes work when created via meta[indexes]"""
         pytest.skip(
             "GeoHaystack index creation is not supported for now"
             "from meta, as it requires a bucketSize parameter."
@@ -266,12 +259,11 @@ class TestIndexes(unittest.TestCase):
 
         Place.ensure_indexes()
         info = Place._get_collection().index_information()
-        info = [value["key"] for key, value in iteritems(info)]
+        info = [value["key"] for key, value in info.items()]
         assert [("location.point", "geoHaystack")] in info
 
     def test_create_geohaystack_index(self):
-        """Ensure that geohaystack indexes can be created
-        """
+        """Ensure that geohaystack indexes can be created"""
 
         class Place(Document):
             location = DictField()
@@ -279,7 +271,7 @@ class TestIndexes(unittest.TestCase):
 
         Place.create_index({"fields": (")location.point", "name")}, bucketSize=10)
         info = Place._get_collection().index_information()
-        info = [value["key"] for key, value in iteritems(info)]
+        info = [value["key"] for key, value in info.items()]
         assert [("location.point", "geoHaystack"), ("name", 1)] in info
 
     def test_dictionary_indexes(self):
@@ -308,7 +300,7 @@ class TestIndexes(unittest.TestCase):
         info = BlogPost.objects._collection.index_information()
         info = [
             (value["key"], value.get("unique", False), value.get("sparse", False))
-            for key, value in iteritems(info)
+            for key, value in info.items()
         ]
         assert ([("addDate", -1)], True, True) in info
 
@@ -366,8 +358,7 @@ class TestIndexes(unittest.TestCase):
         assert sorted(info.keys()) == ["_cls_1_user_guid_1", "_id_"]
 
     def test_embedded_document_index(self):
-        """Tests settings an index on an embedded document
-        """
+        """Tests settings an index on an embedded document"""
 
         class Date(EmbeddedDocument):
             year = IntField(db_field="yr")
@@ -384,8 +375,7 @@ class TestIndexes(unittest.TestCase):
         assert sorted(info.keys()) == ["_id_", "date.yr_-1"]
 
     def test_list_embedded_document_index(self):
-        """Ensure list embedded documents can be indexed
-        """
+        """Ensure list embedded documents can be indexed"""
 
         class Tag(EmbeddedDocument):
             name = StringField(db_field="tag")
@@ -421,8 +411,7 @@ class TestIndexes(unittest.TestCase):
         assert sorted(info.keys()) == ["_cls_1", "_id_"]
 
     def test_covered_index(self):
-        """Ensure that covered indexes can be used
-        """
+        """Ensure that covered indexes can be used"""
 
         class Test(Document):
             a = IntField()
@@ -552,15 +541,15 @@ class TestIndexes(unittest.TestCase):
         assert 5 == query_result.count()
 
         incorrect_collation = {"arndom": "wrdo"}
-        with pytest.raises(OperationFailure):
+        with pytest.raises(OperationFailure) as exc_info:
             BlogPost.objects.collation(incorrect_collation).count()
+        assert "Missing expected field" in str(exc_info.value)
 
         query_result = BlogPost.objects.collation({}).order_by("name")
         assert [x.name for x in query_result] == sorted(names)
 
     def test_unique(self):
-        """Ensure that uniqueness constraints are applied to fields.
-        """
+        """Ensure that uniqueness constraints are applied to fields."""
 
         class BlogPost(Document):
             title = StringField()
@@ -608,8 +597,7 @@ class TestIndexes(unittest.TestCase):
         )
 
     def test_unique_with(self):
-        """Ensure that unique_with constraints are applied to fields.
-        """
+        """Ensure that unique_with constraints are applied to fields."""
 
         class Date(EmbeddedDocument):
             year = IntField(db_field="yr")
@@ -634,8 +622,7 @@ class TestIndexes(unittest.TestCase):
             post3.save()
 
     def test_unique_embedded_document(self):
-        """Ensure that uniqueness constraints are applied to fields on embedded documents.
-        """
+        """Ensure that uniqueness constraints are applied to fields on embedded documents."""
 
         class SubDocument(EmbeddedDocument):
             year = IntField(db_field="yr")
@@ -806,18 +793,6 @@ class TestIndexes(unittest.TestCase):
         info = Log.objects._collection.index_information()
         assert 3600 == info["created_1"]["expireAfterSeconds"]
 
-    def test_index_drop_dups_silently_ignored(self):
-        class Customer(Document):
-            cust_id = IntField(unique=True, required=True)
-            meta = {
-                "indexes": ["cust_id"],
-                "index_drop_dups": True,
-                "allow_inheritance": False,
-            }
-
-        Customer.drop_collection()
-        Customer.objects.first()
-
     def test_unique_and_indexes(self):
         """Ensure that 'unique' constraints aren't overridden by
         meta.indexes.
@@ -901,7 +876,7 @@ class TestIndexes(unittest.TestCase):
             self.fail("Unbound local error at index + pk definition")
 
         info = BlogPost.objects._collection.index_information()
-        info = [value["key"] for key, value in iteritems(info)]
+        info = [value["key"] for key, value in info.items()]
         index_item = [("_id", 1), ("comments.comment_id", 1)]
         assert index_item in info
 
@@ -942,7 +917,7 @@ class TestIndexes(unittest.TestCase):
             meta = {"indexes": ["provider_ids.foo", "provider_ids.bar"]}
 
         info = MyDoc.objects._collection.index_information()
-        info = [value["key"] for key, value in iteritems(info)]
+        info = [value["key"] for key, value in info.items()]
         assert [("provider_ids.foo", 1)] in info
         assert [("provider_ids.bar", 1)] in info
 
@@ -1058,10 +1033,6 @@ class TestIndexes(unittest.TestCase):
                 del index_info[key][
                     "ns"
                 ]  # drop the index namespace - we don't care about that here, MongoDB 3+
-            if "dropDups" in index_info[key]:
-                del index_info[key][
-                    "dropDups"
-                ]  # drop the index dropDups - it is deprecated in MongoDB 3+
 
         assert index_info == {
             "txt_1": {"key": [("txt", 1)], "background": False},

@@ -1,28 +1,25 @@
-# -*- coding: utf-8 -*-
 import uuid
 
 from bson import Binary
 import pytest
-import six
 
 from mongoengine import *
 from tests.utils import MongoDBTestCase
 
-BIN_VALUE = six.b(
-    "\xa9\xf3\x8d(\xd7\x03\x84\xb4k[\x0f\xe3\xa2\x19\x85p[J\xa3\xd2>\xde\xe6\x87\xb1\x7f\xc6\xe6\xd9r\x18\xf5"
+BIN_VALUE = "\xa9\xf3\x8d(\xd7\x03\x84\xb4k[\x0f\xe3\xa2\x19\x85p[J\xa3\xd2>\xde\xe6\x87\xb1\x7f\xc6\xe6\xd9r\x18\xf5".encode(
+    "latin-1"
 )
 
 
 class TestBinaryField(MongoDBTestCase):
     def test_binary_fields(self):
-        """Ensure that binary fields can be stored and retrieved.
-        """
+        """Ensure that binary fields can be stored and retrieved."""
 
         class Attachment(Document):
             content_type = StringField()
             blob = BinaryField()
 
-        BLOB = six.b("\xe6\x00\xc4\xff\x07")
+        BLOB = b"\xe6\x00\xc4\xff\x07"
         MIME_TYPE = "application/octet-stream"
 
         Attachment.drop_collection()
@@ -32,11 +29,10 @@ class TestBinaryField(MongoDBTestCase):
 
         attachment_1 = Attachment.objects().first()
         assert MIME_TYPE == attachment_1.content_type
-        assert BLOB == six.binary_type(attachment_1.blob)
+        assert BLOB == bytes(attachment_1.blob)
 
     def test_validation_succeeds(self):
-        """Ensure that valid values can be assigned to binary fields.
-        """
+        """Ensure that valid values can be assigned to binary fields."""
 
         class AttachmentRequired(Document):
             blob = BinaryField(required=True)
@@ -47,11 +43,11 @@ class TestBinaryField(MongoDBTestCase):
         attachment_required = AttachmentRequired()
         with pytest.raises(ValidationError):
             attachment_required.validate()
-        attachment_required.blob = Binary(six.b("\xe6\x00\xc4\xff\x07"))
+        attachment_required.blob = Binary(b"\xe6\x00\xc4\xff\x07")
         attachment_required.validate()
 
-        _5_BYTES = six.b("\xe6\x00\xc4\xff\x07")
-        _4_BYTES = six.b("\xe6\x00\xc4\xff")
+        _5_BYTES = b"\xe6\x00\xc4\xff\x07"
+        _4_BYTES = b"\xe6\x00\xc4\xff"
         with pytest.raises(ValidationError):
             AttachmentSizeLimit(blob=_5_BYTES).validate()
         AttachmentSizeLimit(blob=_4_BYTES).validate()
@@ -62,7 +58,7 @@ class TestBinaryField(MongoDBTestCase):
         class Attachment(Document):
             blob = BinaryField()
 
-        for invalid_data in (2, u"Im_a_unicode", ["some_str"]):
+        for invalid_data in (2, "Im_a_unicode", ["some_str"]):
             with pytest.raises(ValidationError):
                 Attachment(blob=invalid_data).validate()
 
@@ -123,10 +119,7 @@ class TestBinaryField(MongoDBTestCase):
             upsert=True, new=True, set__bin_field=BIN_VALUE
         )
         assert doc.some_field == "test"
-        if six.PY3:
-            assert doc.bin_field == BIN_VALUE
-        else:
-            assert doc.bin_field == Binary(BIN_VALUE)
+        assert doc.bin_field == BIN_VALUE
 
     def test_update_one(self):
         """Ensures no regression of bug #1127"""
@@ -136,7 +129,7 @@ class TestBinaryField(MongoDBTestCase):
 
         MyDocument.drop_collection()
 
-        bin_data = six.b("\xe6\x00\xc4\xff\x07")
+        bin_data = b"\xe6\x00\xc4\xff\x07"
         doc = MyDocument(bin_field=bin_data).save()
 
         n_updated = MyDocument.objects(bin_field=bin_data).update_one(
@@ -144,7 +137,4 @@ class TestBinaryField(MongoDBTestCase):
         )
         assert n_updated == 1
         fetched = MyDocument.objects.with_id(doc.id)
-        if six.PY3:
-            assert fetched.bin_field == BIN_VALUE
-        else:
-            assert fetched.bin_field == Binary(BIN_VALUE)
+        assert fetched.bin_field == BIN_VALUE

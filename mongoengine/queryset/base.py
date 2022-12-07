@@ -1,9 +1,9 @@
-from __future__ import absolute_import
-
 import copy
 import itertools
 import re
 import warnings
+
+from collections.abc import Mapping
 
 from bson import SON, json_util
 from bson.code import Code
@@ -11,14 +11,17 @@ import pymongo
 import pymongo.errors
 from pymongo.collection import ReturnDocument
 from pymongo.common import validate_read_preference
-import six
-from six import iteritems
+from pymongo.read_concern import ReadConcern
 
 from mongoengine import signals
 from mongoengine.base import get_document
 from mongoengine.common import _import_class
 from mongoengine.connection import get_db
-from mongoengine.context_managers import set_write_concern, switch_db
+from mongoengine.context_managers import (
+    set_read_write_concern,
+    set_write_concern,
+    switch_db,
+)
 from mongoengine.errors import (
     BulkWriteError,
     InvalidQueryError,
@@ -26,6 +29,7 @@ from mongoengine.errors import (
     NotUniqueError,
     OperationError,
 )
+from mongoengine.pymongo_support import count_documents
 from mongoengine.queryset import transform
 from mongoengine.queryset.field_list import QueryFieldList
 from mongoengine.queryset.visitor import Q, QNode
@@ -41,7 +45,7 @@ DENY = 3
 PULL = 4
 
 
-class BaseQuerySet(object):
+class BaseQuerySet:
     """A set of results returned from a query. Wraps a MongoDB cursor,
     providing :class:`~mongoengine.Document` objects as the results.
     """
@@ -60,8 +64,9 @@ class BaseQuerySet(object):
         self._ordering = None
         self._snapshot = False
         self._timeout = True
-        self._slave_okay = False
+        self._allow_disk_use = False
         self._read_preference = None
+        self._read_concern = None
         self._iter = False
         self._scalar = []
         self._none = False
@@ -80,12 +85,21 @@ class BaseQuerySet(object):
         self._cursor_obj = None
         self._limit = None
         self._skip = None
+
         self._hint = -1  # Using -1 as None is a valid value for hint
         self._collation = None
         self._batch_size = None
-        self.only_fields = []
         self._max_time_ms = None
         self._comment = None
+
+        # Hack - As people expect cursor[5:5] to return
+        # an empty result set. It's hard to do that right, though, because the
+        # server uses limit(0) to mean 'no limit'. So we set _empty
+        # in that case and check for it when iterating. We also unset
+        # it anytime we change _limit. Inspired by how it is done in pymongo.Cursor
+        self._empty = False
+
+        self._session = None
 
     def __call__(self, q_obj=None, **query):
         """Filter the selected documents by calling the
@@ -159,6 +173,7 @@ class BaseQuerySet(object):
         [<User: User object>, <User: User object>]
         """
         queryset = self.clone()
+        queryset._empty = False
 
         # Handle a slice
         if isinstance(key, slice):
@@ -166,6 +181,8 @@ class BaseQuerySet(object):
             queryset._skip, queryset._limit = key.start, key.stop
             if key.start and key.stop:
                 queryset._limit = key.stop - key.start
+            if queryset._limit == 0:
+                queryset._empty = True
 
             # Allow further QuerySet modifications to be performed
             return queryset
@@ -177,7 +194,6 @@ class BaseQuerySet(object):
                     queryset._document._from_son(
                         queryset._cursor[key],
                         _auto_dereference=self._auto_dereference,
-                        only_fields=self.only_fields,
                     )
                 )
 
@@ -187,7 +203,6 @@ class BaseQuerySet(object):
             return queryset._document._from_son(
                 queryset._cursor[key],
                 _auto_dereference=self._auto_dereference,
-                only_fields=self.only_fields,
             )
 
         raise TypeError("Provide a slice or an integer index")
@@ -203,8 +218,6 @@ class BaseQuerySet(object):
     def __bool__(self):
         """Avoid to open all records in an if stmt in Py3."""
         return self._has_data()
-
-    __nonzero__ = __bool__  # For Py2 support
 
     # Core functions
 
@@ -248,34 +261,30 @@ class BaseQuerySet(object):
         `DocumentName.MultipleObjectsReturned` exception if multiple results
         and :class:`~mongoengine.queryset.DoesNotExist` or
         `DocumentName.DoesNotExist` if no results are found.
-
-        .. versionadded:: 0.3
         """
         queryset = self.clone()
         queryset = queryset.order_by().limit(2)
         queryset = queryset.filter(*q_objs, **query)
 
         try:
-            result = six.next(queryset)
+            result = next(queryset)
         except StopIteration:
             msg = "%s matching query does not exist." % queryset._document._class_name
             raise queryset._document.DoesNotExist(msg)
+
         try:
-            six.next(queryset)
+            # Check if there is another match
+            next(queryset)
         except StopIteration:
             return result
 
-        # If we were able to retrieve the 2nd doc, rewind the cursor and
-        # raise the MultipleObjectsReturned exception.
-        queryset.rewind()
-        message = u"%d items returned, instead of 1" % queryset.count()
-        raise queryset._document.MultipleObjectsReturned(message)
+        # If we were able to retrieve the 2nd doc, raise the MultipleObjectsReturned exception.
+        raise queryset._document.MultipleObjectsReturned(
+            "2 or more items returned, instead of 1"
+        )
 
     def create(self, **kwargs):
-        """Create new object. Returns the saved object instance.
-
-        .. versionadded:: 0.4
-        """
+        """Create new object. Returns the saved object instance."""
         return self._document(**kwargs).save(force_insert=True)
 
     def first(self):
@@ -302,15 +311,11 @@ class BaseQuerySet(object):
                 ``insert(..., {w: 2, fsync: True})`` will wait until at least
                 two servers have recorded the write and will force an fsync on
                 each server being written to.
-        :parm signal_kwargs: (optional) kwargs dictionary to be passed to
+        :param signal_kwargs: (optional) kwargs dictionary to be passed to
             the signal calls.
 
         By default returns document instances, set ``load_bulk`` to False to
         return just ``ObjectIds``
-
-        .. versionadded:: 0.5
-        .. versionchanged:: 0.10.7
-            Add signal_kwargs argument
         """
         Document = _import_class("Document")
 
@@ -345,7 +350,7 @@ class BaseQuerySet(object):
                 insert_func = collection.insert_one
 
         try:
-            inserted_result = insert_func(raw)
+            inserted_result = insert_func(raw, session=self._session)
             ids = (
                 [inserted_result.inserted_id]
                 if return_one
@@ -353,20 +358,20 @@ class BaseQuerySet(object):
             )
         except pymongo.errors.DuplicateKeyError as err:
             message = "Could not save document (%s)"
-            raise NotUniqueError(message % six.text_type(err))
+            raise NotUniqueError(message % err)
         except pymongo.errors.BulkWriteError as err:
             # inserting documents that already have an _id field will
             # give huge performance debt or raise
-            message = u"Bulk write error: (%s)"
-            raise BulkWriteError(message % six.text_type(err.details))
+            message = "Bulk write error: (%s)"
+            raise BulkWriteError(message % err.details)
         except pymongo.errors.OperationFailure as err:
             message = "Could not save document (%s)"
-            if re.match("^E1100[01] duplicate key", six.text_type(err)):
+            if re.match("^E1100[01] duplicate key", str(err)):
                 # E11000 - duplicate key error index
                 # E11001 - duplicate key on update
-                message = u"Tried to save duplicate unique keys (%s)"
-                raise NotUniqueError(message % six.text_type(err))
-            raise OperationError(message % six.text_type(err))
+                message = "Tried to save duplicate unique keys (%s)"
+                raise NotUniqueError(message % err)
+            raise OperationError(message % err)
 
         # Apply inserted_ids to documents
         for doc, doc_id in zip(docs, ids):
@@ -392,9 +397,37 @@ class BaseQuerySet(object):
             :meth:`skip` that has been applied to this cursor into account when
             getting the count
         """
-        if self._limit == 0 and with_limit_and_skip is False or self._none:
+        # mimic the fact that setting .limit(0) in pymongo sets no limit
+        # https://docs.mongodb.com/manual/reference/method/cursor.limit/#zero-value
+        if (
+            self._limit == 0
+            and with_limit_and_skip is False
+            or self._none
+            or self._empty
+        ):
             return 0
-        count = self._cursor.count(with_limit_and_skip=with_limit_and_skip)
+
+        kwargs = (
+            {"limit": self._limit, "skip": self._skip} if with_limit_and_skip else {}
+        )
+
+        if self._limit == 0:
+            # mimic the fact that historically .limit(0) sets no limit
+            kwargs.pop("limit", None)
+
+        if self._hint not in (-1, None):
+            kwargs["hint"] = self._hint
+
+        if self._collation:
+            kwargs["collation"] = self._collation
+
+        count = count_documents(
+            collection=self._cursor.collection,
+            filter=self._query,
+            session=self._session,
+            **kwargs,
+        )
+
         self._cursor_obj = None
         return count
 
@@ -490,7 +523,13 @@ class BaseQuerySet(object):
                 return result.deleted_count
 
     def update(
-        self, upsert=False, multi=True, write_concern=None, full_result=False, **update
+        self,
+        upsert=False,
+        multi=True,
+        write_concern=None,
+        read_concern=None,
+        full_result=False,
+        **update,
     ):
         """Perform an atomic update on the fields matched by the query.
 
@@ -502,13 +541,12 @@ class BaseQuerySet(object):
             ``save(..., write_concern={w: 2, fsync: True}, ...)`` will
             wait until at least two servers have recorded the write and
             will force an fsync on the primary server.
+        :param read_concern: Override the read concern for the operation
         :param full_result: Return the associated ``pymongo.UpdateResult`` rather than just the number
             updated items
         :param update: Django-style update keyword arguments
 
         :returns the number of updated documents (unless ``full_result`` is True)
-
-        .. versionadded:: 0.2
         """
         if not update and not upsert:
             raise OperationError("No update parameters, would remove data")
@@ -528,24 +566,26 @@ class BaseQuerySet(object):
             else:
                 update["$set"] = {"_cls": queryset._document._class_name}
         try:
-            with set_write_concern(queryset._collection, write_concern) as collection:
+            with set_read_write_concern(
+                queryset._collection, write_concern, read_concern
+            ) as collection:
                 update_func = collection.update_one
                 if multi:
                     update_func = collection.update_many
-                result = update_func(query, update, upsert=upsert)
+                result = update_func(query, update, upsert=upsert, session=self._session)
             if full_result:
                 return result
             elif result.raw_result:
                 return result.raw_result["n"]
         except pymongo.errors.DuplicateKeyError as err:
-            raise NotUniqueError(u"Update failed (%s)" % six.text_type(err))
+            raise NotUniqueError("Update failed (%s)" % err)
         except pymongo.errors.OperationFailure as err:
-            if six.text_type(err) == u"multi not coded yet":
-                message = u"update() method requires MongoDB 1.1.3+"
+            if str(err) == "multi not coded yet":
+                message = "update() method requires MongoDB 1.1.3+"
                 raise OperationError(message)
-            raise OperationError(u"Update failed (%s)" % six.text_type(err))
+            raise OperationError("Update failed (%s)" % err)
 
-    def upsert_one(self, write_concern=None, **update):
+    def upsert_one(self, write_concern=None, read_concern=None, **update):
         """Overwrite or add the first document matched by the query.
 
         :param write_concern: Extra keyword arguments are passed down which
@@ -554,19 +594,19 @@ class BaseQuerySet(object):
             ``save(..., write_concern={w: 2, fsync: True}, ...)`` will
             wait until at least two servers have recorded the write and
             will force an fsync on the primary server.
+        :param read_concern: Override the read concern for the operation
         :param update: Django-style update keyword arguments
 
         :returns the new or overwritten document
-
-        .. versionadded:: 0.10.2
         """
 
         atomic_update = self.update(
             multi=False,
             upsert=True,
             write_concern=write_concern,
+            read_concern=read_concern,
             full_result=True,
-            **update
+            **update,
         )
 
         if atomic_update.raw_result["updatedExisting"]:
@@ -591,14 +631,13 @@ class BaseQuerySet(object):
         :param update: Django-style update keyword arguments
             full_result
         :returns the number of updated documents (unless ``full_result`` is True)
-        .. versionadded:: 0.2
         """
         return self.update(
             upsert=upsert,
             multi=False,
             write_concern=write_concern,
             full_result=full_result,
-            **update
+            **update,
         )
 
     def modify(
@@ -623,8 +662,6 @@ class BaseQuerySet(object):
         :param new: return updated rather than original document
             (default ``False``)
         :param update: Django-style update keyword arguments
-
-        .. versionadded:: 0.9
         """
 
         if remove and new:
@@ -658,21 +695,19 @@ class BaseQuerySet(object):
                     upsert=upsert,
                     sort=sort,
                     return_document=return_doc,
-                    **self._cursor_args
+                    **self._cursor_args,
                 )
         except pymongo.errors.DuplicateKeyError as err:
-            raise NotUniqueError(u"Update failed (%s)" % err)
+            raise NotUniqueError("Update failed (%s)" % err)
         except pymongo.errors.OperationFailure as err:
-            raise OperationError(u"Update failed (%s)" % err)
+            raise OperationError("Update failed (%s)" % err)
 
         if full_response:
             if result["value"] is not None:
-                result["value"] = self._document._from_son(
-                    result["value"], only_fields=self.only_fields
-                )
+                result["value"] = self._document._from_son(result["value"])
         else:
             if result is not None:
-                result = self._document._from_son(result, only_fields=self.only_fields)
+                result = self._document._from_son(result)
 
         return result
 
@@ -682,8 +717,6 @@ class BaseQuerySet(object):
         `None` if no document exists with that id.
 
         :param object_id: the value for the id of the document to look up
-
-        .. versionchanged:: 0.6 Raises InvalidQueryError if filter has been set
         """
         queryset = self.clone()
         if not queryset._query_obj.empty:
@@ -692,22 +725,18 @@ class BaseQuerySet(object):
         return queryset.filter(pk=object_id).first()
 
     def in_bulk(self, object_ids):
-        """Retrieve a set of documents by their ids.
+        """ "Retrieve a set of documents by their ids.
 
-        :param object_ids: a list or tuple of ``ObjectId``\ s
-        :rtype: dict of ObjectIds as keys and collection-specific
+        :param object_ids: a list or tuple of ObjectId's
+        :rtype: dict of ObjectId's as keys and collection-specific
                 Document subclasses as values.
-
-        .. versionadded:: 0.3
         """
         doc_map = {}
 
         docs = self._collection.find({"_id": {"$in": object_ids}}, **self._cursor_args)
         if self._scalar:
             for doc in docs:
-                doc_map[doc["_id"]] = self._get_scalar(
-                    self._document._from_son(doc, only_fields=self.only_fields)
-                )
+                doc_map[doc["_id"]] = self._get_scalar(self._document._from_son(doc))
         elif self._as_pymongo:
             for doc in docs:
                 doc_map[doc["_id"]] = doc
@@ -715,14 +744,15 @@ class BaseQuerySet(object):
             for doc in docs:
                 doc_map[doc["_id"]] = self._document._from_son(
                     doc,
-                    only_fields=self.only_fields,
                     _auto_dereference=self._auto_dereference,
                 )
 
         return doc_map
 
     def none(self):
-        """Helper that just returns a list"""
+        """Returns a queryset that never returns any objects and no query will be executed when accessing the results
+        inspired by django none() https://docs.djangoproject.com/en/dev/ref/models/querysets/#none
+        """
         queryset = self.clone()
         queryset._none = True
         return queryset
@@ -742,8 +772,6 @@ class BaseQuerySet(object):
         evaluated against if you are using more than one database.
 
         :param alias: The database alias
-
-        .. versionadded:: 0.9
         """
 
         with switch_db(self._document, alias) as cls:
@@ -775,21 +803,23 @@ class BaseQuerySet(object):
             "_ordering",
             "_snapshot",
             "_timeout",
-            "_slave_okay",
+            "_allow_disk_use",
             "_read_preference",
+            "_read_concern",
             "_iter",
             "_scalar",
             "_as_pymongo",
             "_limit",
             "_skip",
+            "_empty",
             "_hint",
             "_collation",
             "_auto_dereference",
             "_search_text",
-            "only_fields",
             "_max_time_ms",
             "_comment",
             "_batch_size",
+            "_session"
         )
 
         for prop in copy_props:
@@ -805,8 +835,6 @@ class BaseQuerySet(object):
         """Handles dereferencing of :class:`~bson.dbref.DBRef` objects or
         :class:`~bson.object_id.ObjectId` a maximum depth in order to cut down
         the number queries to mongodb.
-
-        .. versionadded:: 0.5
         """
         # Make select related work the same for querysets
         max_depth += 1
@@ -822,11 +850,17 @@ class BaseQuerySet(object):
         """
         queryset = self.clone()
         queryset._limit = n
+        queryset._empty = False  # cancels the effect of empty
 
         # If a cursor object has already been created, apply the limit to it.
         if queryset._cursor_obj:
             queryset._cursor_obj.limit(queryset._limit)
 
+        return queryset
+
+    def session(self, session):
+        queryset = self.clone()
+        queryset._session = session
         return queryset
 
     def skip(self, n):
@@ -854,8 +888,6 @@ class BaseQuerySet(object):
 
         Hinting will not do anything if the corresponding index does not exist.
         The last hint applied to this cursor takes precedence over all others.
-
-        .. versionadded:: 0.5
         """
         queryset = self.clone()
         queryset._hint = index
@@ -917,10 +949,6 @@ class BaseQuerySet(object):
 
         .. note:: This is a command and won't take ordering or limit into
            account.
-
-        .. versionadded:: 0.4
-        .. versionchanged:: 0.5 - Fixed handling references
-        .. versionchanged:: 0.6 - Improved db_field refrence handling
         """
         queryset = self.clone()
 
@@ -984,12 +1012,8 @@ class BaseQuerySet(object):
         field filters.
 
         :param fields: fields to include
-
-        .. versionadded:: 0.3
-        .. versionchanged:: 0.5 - Added subfield support
         """
         fields = {f: QueryFieldList.ONLY for f in fields}
-        self.only_fields = fields.keys()
         return self.fields(True, **fields)
 
     def exclude(self, *fields):
@@ -1006,8 +1030,6 @@ class BaseQuerySet(object):
         field filters.
 
         :param fields: fields to exclude
-
-        .. versionadded:: 0.5
         """
         fields = {f: QueryFieldList.EXCLUDE for f in fields}
         return self.fields(**fields)
@@ -1026,18 +1048,18 @@ class BaseQuerySet(object):
 
             posts = BlogPost.objects(...).fields(comments=0)
 
-        To retrieve a subrange of array elements:
+        To retrieve a subrange or sublist of array elements,
+        support exist for both the `slice` and `elemMatch` projection operator:
 
             posts = BlogPost.objects(...).fields(slice__comments=5)
+            posts = BlogPost.objects(...).fields(elemMatch__comments="test")
 
         :param kwargs: A set of keyword arguments identifying what to
             include, exclude, or slice.
-
-        .. versionadded:: 0.5
         """
 
         # Check for an operator and transform to mongo-style if there is
-        operators = ["slice"]
+        operators = ["slice", "elemMatch"]
         cleaned_fields = []
         for key, value in kwargs.items():
             parts = key.split("__")
@@ -1075,8 +1097,6 @@ class BaseQuerySet(object):
         .exclude(). ::
 
             post = BlogPost.objects.exclude('comments').all_fields()
-
-        .. versionadded:: 0.5
         """
         queryset = self.clone()
         queryset._loaded_fields = QueryFieldList(
@@ -1140,7 +1160,7 @@ class BaseQuerySet(object):
 
     def explain(self):
         """Return an explain plan record for the
-        :class:`~mongoengine.queryset.QuerySet`\ 's cursor.
+        :class:`~mongoengine.queryset.QuerySet` cursor.
         """
         return self._cursor.explain()
 
@@ -1149,9 +1169,6 @@ class BaseQuerySet(object):
         """Enable or disable snapshot mode when querying.
 
         :param enabled: whether or not snapshot mode is enabled
-
-        ..versionchanged:: 0.5 - made chainable
-        .. deprecated:: Ignored with PyMongo 3+
         """
         msg = "snapshot is deprecated as it has no impact when using PyMongo 3+."
         warnings.warn(msg, DeprecationWarning)
@@ -1159,29 +1176,23 @@ class BaseQuerySet(object):
         queryset._snapshot = enabled
         return queryset
 
+    def allow_disk_use(self, enabled):
+        """Enable or disable the use of temporary files on disk while processing a blocking sort operation.
+         (To store data exceeding the 100 megabyte system memory limit)
+
+        :param enabled: whether or not temporary files on disk are used
+        """
+        queryset = self.clone()
+        queryset._allow_disk_use = enabled
+        return queryset
+
     def timeout(self, enabled):
         """Enable or disable the default mongod timeout when querying. (no_cursor_timeout option)
 
         :param enabled: whether or not the timeout is used
-
-        ..versionchanged:: 0.5 - made chainable
         """
         queryset = self.clone()
         queryset._timeout = enabled
-        return queryset
-
-    # DEPRECATED. Has no more impact on PyMongo 3+
-    def slave_okay(self, enabled):
-        """Enable or disable the slave_okay when querying.
-
-        :param enabled: whether or not the slave_okay is enabled
-
-        .. deprecated:: Ignored with PyMongo 3+
-        """
-        msg = "slave_okay is deprecated as it has no impact when using PyMongo 3+."
-        warnings.warn(msg, DeprecationWarning)
-        queryset = self.clone()
-        queryset._slave_okay = enabled
         return queryset
 
     def read_preference(self, read_preference):
@@ -1194,6 +1205,22 @@ class BaseQuerySet(object):
         queryset = self.clone()
         queryset._read_preference = read_preference
         queryset._cursor_obj = None  # we need to re-create the cursor object whenever we apply read_preference
+        return queryset
+
+    def read_concern(self, read_concern):
+        """Change the read_concern when querying.
+
+        :param read_concern: override ReplicaSetConnection-level
+            preference.
+        """
+        if read_concern is not None and not isinstance(read_concern, Mapping):
+            raise TypeError(f"{read_concern!r} is not a valid read concern.")
+
+        queryset = self.clone()
+        queryset._read_concern = (
+            ReadConcern(**read_concern) if read_concern is not None else None
+        )
+        queryset._cursor_obj = None  # we need to re-create the cursor object whenever we apply read_concern
         return queryset
 
     def scalar(self, *fields):
@@ -1250,21 +1277,28 @@ class BaseQuerySet(object):
     def from_json(self, json_data):
         """Converts json data to unsaved objects"""
         son_data = json_util.loads(json_data)
-        return [
-            self._document._from_son(data, only_fields=self.only_fields)
-            for data in son_data
-        ]
+        return [self._document._from_son(data) for data in son_data]
 
-    def aggregate(self, *pipeline, **kwargs):
-        """
-        Perform a aggregate function based in your queryset params
+    def aggregate(self, pipeline, *suppl_pipeline, **kwargs):
+        """Perform a aggregate function based in your queryset params
+
         :param pipeline: list of aggregation commands,\
             see: http://docs.mongodb.org/manual/core/aggregation-pipeline/
-
-        .. versionadded:: 0.9
+        :param suppl_pipeline: unpacked list of pipeline (added to support deprecation of the old interface)
+            parameter will be removed shortly
+        :param kwargs: (optional) kwargs dictionary to be passed to pymongo's aggregate call
+            See https://api.mongodb.com/python/current/api/pymongo/collection.html#pymongo.collection.Collection.aggregate
         """
-        initial_pipeline = []
+        using_deprecated_interface = isinstance(pipeline, dict) or bool(suppl_pipeline)
+        user_pipeline = [pipeline] if isinstance(pipeline, dict) else list(pipeline)
 
+        if using_deprecated_interface:
+            msg = "Calling .aggregate() with un unpacked list (*pipeline) is deprecated, it will soon change and will expect a list (similar to pymongo.Collection.aggregate interface), see documentation"
+            warnings.warn(msg, DeprecationWarning)
+
+        user_pipeline += suppl_pipeline
+
+        initial_pipeline = []
         if self._query:
             initial_pipeline.append({"$match": self._query})
 
@@ -1281,14 +1315,15 @@ class BaseQuerySet(object):
         if self._skip is not None:
             initial_pipeline.append({"$skip": self._skip})
 
-        pipeline = initial_pipeline + list(pipeline)
+        final_pipeline = initial_pipeline + user_pipeline
 
-        if self._read_preference is not None:
-            return self._collection.with_options(
-                read_preference=self._read_preference
-            ).aggregate(pipeline, cursor={}, **kwargs)
+        collection = self._collection
+        if self._read_preference is not None or self._read_concern is not None:
+            collection = self._collection.with_options(
+                read_preference=self._read_preference, read_concern=self._read_concern
+            )
 
-        return self._collection.aggregate(pipeline, cursor={}, **kwargs)
+        return collection.aggregate(final_pipeline, cursor={}, **kwargs)
 
     # JS functionality
     def map_reduce(
@@ -1324,12 +1359,6 @@ class BaseQuerySet(object):
             Map/Reduce changed in server version **>= 1.7.4**. The PyMongo
             :meth:`~pymongo.collection.Collection.map_reduce` helper requires
             PyMongo version **>= 1.11**.
-
-        .. versionchanged:: 0.5
-           - removed ``keep_temp`` keyword argument, which was only relevant
-             for MongoDB server versions older than 1.7.4
-
-        .. versionadded:: 0.3
         """
         queryset = self.clone()
 
@@ -1341,13 +1370,13 @@ class BaseQuerySet(object):
         map_f_scope = {}
         if isinstance(map_f, Code):
             map_f_scope = map_f.scope
-            map_f = six.text_type(map_f)
+            map_f = str(map_f)
         map_f = Code(queryset._sub_js_fields(map_f), map_f_scope)
 
         reduce_f_scope = {}
         if isinstance(reduce_f, Code):
             reduce_f_scope = reduce_f.scope
-            reduce_f = six.text_type(reduce_f)
+            reduce_f = str(reduce_f)
         reduce_f_code = queryset._sub_js_fields(reduce_f)
         reduce_f = Code(reduce_f_code, reduce_f_scope)
 
@@ -1357,7 +1386,7 @@ class BaseQuerySet(object):
             finalize_f_scope = {}
             if isinstance(finalize_f, Code):
                 finalize_f_scope = finalize_f.scope
-                finalize_f = six.text_type(finalize_f)
+                finalize_f = str(finalize_f)
             finalize_f_code = queryset._sub_js_fields(finalize_f)
             finalize_f = Code(finalize_f_code, finalize_f_scope)
             mr_args["finalize"] = finalize_f
@@ -1373,7 +1402,7 @@ class BaseQuerySet(object):
         else:
             map_reduce_function = "map_reduce"
 
-            if isinstance(output, six.string_types):
+            if isinstance(output, str):
                 mr_args["out"] = output
 
             elif isinstance(output, dict):
@@ -1466,8 +1495,6 @@ class BaseQuerySet(object):
         .. note:: When using this mode of query, the database will call your
                   function, or evaluate your predicate clause, for each object
                   in the collection.
-
-        .. versionadded:: 0.5
         """
         queryset = self.clone()
         where_clause = queryset._sub_js_fields(where_clause)
@@ -1544,9 +1571,6 @@ class BaseQuerySet(object):
         :param field: the field to use
         :param normalize: normalize the results so they add to 1.0
         :param map_reduce: Use map_reduce over exec_js
-
-        .. versionchanged:: 0.5 defaults to map_reduce and can handle embedded
-                            document lookups
         """
         if map_reduce:
             return self._item_frequencies_map_reduce(field, normalize=normalize)
@@ -1555,12 +1579,11 @@ class BaseQuerySet(object):
     # Iterator helpers
 
     def __next__(self):
-        """Wrap the result in a :class:`~mongoengine.Document` object.
-        """
-        if self._limit == 0 or self._none:
+        """Wrap the result in a :class:`~mongoengine.Document` object."""
+        if self._none or self._empty:
             raise StopIteration
 
-        raw_doc = six.next(self._cursor)
+        raw_doc = next(self._cursor)
 
         if self._as_pymongo:
             return raw_doc
@@ -1568,7 +1591,6 @@ class BaseQuerySet(object):
         doc = self._document._from_son(
             raw_doc,
             _auto_dereference=self._auto_dereference,
-            only_fields=self.only_fields,
         )
 
         if self._scalar:
@@ -1576,13 +1598,8 @@ class BaseQuerySet(object):
 
         return doc
 
-    next = __next__  # For Python2 support
-
     def rewind(self):
-        """Rewind the cursor to its unevaluated state.
-
-        .. versionadded:: 0.3
-        """
+        """Rewind the cursor to its unevaluated state."""
         self._iter = False
         self._cursor.rewind()
 
@@ -1608,6 +1625,9 @@ class BaseQuerySet(object):
         if not self._timeout:
             cursor_args["no_cursor_timeout"] = True
 
+        if self._allow_disk_use:
+            cursor_args["allow_disk_use"] = True
+
         if self._loaded_fields:
             cursor_args[fields_name] = self._loaded_fields.as_dict()
 
@@ -1616,6 +1636,9 @@ class BaseQuerySet(object):
                 cursor_args[fields_name] = {}
 
             cursor_args[fields_name]["_text_score"] = {"$meta": "textScore"}
+
+        if self._session:
+            cursor_args["session"] = self._session
 
         return cursor_args
 
@@ -1631,9 +1654,9 @@ class BaseQuerySet(object):
         # XXX In PyMongo 3+, we define the read preference on a collection
         # level, not a cursor level. Thus, we need to get a cloned collection
         # object using `with_options` first.
-        if self._read_preference is not None:
+        if self._read_preference is not None or self._read_concern is not None:
             self._cursor_obj = self._collection.with_options(
-                read_preference=self._read_preference
+                read_preference=self._read_preference, read_concern=self._read_concern
             ).find(self._query, **self._cursor_args)
         else:
             self._cursor_obj = self._collection.find(self._query, **self._cursor_args)
@@ -1805,13 +1828,13 @@ class BaseQuerySet(object):
             }
         """
         total, data, types = self.exec_js(freq_func, field)
-        values = {types.get(k): int(v) for k, v in iteritems(data)}
+        values = {types.get(k): int(v) for k, v in data.items()}
 
         if normalize:
             values = {k: float(v) / total for k, v in values.items()}
 
         frequencies = {}
-        for k, v in iteritems(values):
+        for k, v in values.items():
             if isinstance(k, float):
                 if int(k) == k:
                     k = int(k)
@@ -1831,7 +1854,7 @@ class BaseQuerySet(object):
             field_parts = field.split(".")
             try:
                 field = ".".join(
-                    f if isinstance(f, six.string_types) else f.db_field
+                    f if isinstance(f, str) else f.db_field
                     for f in self._document._lookup_field(field_parts)
                 )
                 db_field_paths.append(field)
@@ -1843,7 +1866,7 @@ class BaseQuerySet(object):
                 for subdoc in subclasses:
                     try:
                         subfield = ".".join(
-                            f if isinstance(f, six.string_types) else f.db_field
+                            f if isinstance(f, str) else f.db_field
                             for f in subdoc._lookup_field(field_parts)
                         )
                         db_field_paths.append(subfield)
@@ -1917,7 +1940,7 @@ class BaseQuerySet(object):
             field_name = match.group(1).split(".")
             fields = self._document._lookup_field(field_name)
             # Substitute the correct name for the field into the javascript
-            return u'["%s"]' % fields[-1].db_field
+            return '["%s"]' % fields[-1].db_field
 
         def field_path_sub(match):
             # Extract just the field name, and look up the field objects
@@ -1947,23 +1970,3 @@ class BaseQuerySet(object):
         setattr(queryset, "_" + method_name, val)
 
         return queryset
-
-    # Deprecated
-    def ensure_index(self, **kwargs):
-        """Deprecated use :func:`Document.ensure_index`"""
-        msg = (
-            "Doc.objects()._ensure_index() is deprecated. "
-            "Use Doc.ensure_index() instead."
-        )
-        warnings.warn(msg, DeprecationWarning)
-        self._document.__class__.ensure_index(**kwargs)
-        return self
-
-    def _ensure_indexes(self):
-        """Deprecated use :func:`~Document.ensure_indexes`"""
-        msg = (
-            "Doc.objects()._ensure_indexes() is deprecated. "
-            "Use Doc.ensure_indexes() instead."
-        )
-        warnings.warn(msg, DeprecationWarning)
-        self._document.__class__.ensure_indexes()

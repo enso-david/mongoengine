@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import pytest
 
 from mongoengine import *
@@ -8,8 +7,7 @@ from tests.utils import MongoDBTestCase
 
 class TestIntField(MongoDBTestCase):
     def test_int_validation(self):
-        """Ensure that invalid values cannot be assigned to int fields.
-        """
+        """Ensure that invalid values cannot be assigned to int fields."""
 
         class Person(Document):
             age = IntField(min_value=0, max_value=110)
